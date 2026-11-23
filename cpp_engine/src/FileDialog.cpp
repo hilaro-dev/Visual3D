@@ -21,29 +21,34 @@ namespace v3d {
 
 namespace {
 
-bool hasObjSuffixCI(const std::string& path) {
-    if (path.size() < 4) return false;
-    const size_t n = path.size();
-    return std::tolower(static_cast<unsigned char>(path[n - 4])) == '.' &&
-           std::tolower(static_cast<unsigned char>(path[n - 3])) == 'o' &&
-           std::tolower(static_cast<unsigned char>(path[n - 2])) == 'b' &&
-           std::tolower(static_cast<unsigned char>(path[n - 1])) == 'j';
+bool hasSuffixCI(const std::string& path, const char* suffix) {
+    const size_t slen = std::strlen(suffix);
+    if (path.size() < slen) return false;
+    const size_t start = path.size() - slen;
+    for (size_t i = 0; i < slen; ++i) {
+        if (std::tolower(static_cast<unsigned char>(path[start + i])) !=
+            std::tolower(static_cast<unsigned char>(suffix[i]))) {
+            return false;
+        }
+    }
+    return true;
 }
 
-}  // namespace
-
-std::string OpenOBJFileDialog(void* ownerHwnd) {
+std::string runWin32OpenDialog(void* ownerHwnd,
+                               const char* filter,
+                               const char* defExt,
+                               const char* title) {
 #if defined(_WIN32)
     char fileBuf[4096]{};
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(OPENFILENAMEA);
     ofn.hwndOwner = static_cast<HWND>(ownerHwnd);
-    ofn.lpstrFilter = "Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFilter = filter;
     ofn.lpstrFile = fileBuf;
     ofn.nMaxFile = static_cast<DWORD>(sizeof(fileBuf));
     ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "obj";
-    ofn.lpstrTitle = "Import Wavefront .OBJ Model";
+    ofn.lpstrDefExt = defExt;
+    ofn.lpstrTitle = title;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (::GetOpenFileNameA(&ofn)) {
@@ -52,11 +57,19 @@ std::string OpenOBJFileDialog(void* ownerHwnd) {
     return {};
 #else
     (void)ownerHwnd;
+    (void)filter;
+    (void)defExt;
+    (void)title;
     return {};
 #endif
 }
 
-std::string SaveOBJFileDialog(const char* defaultName, void* ownerHwnd) {
+std::string runWin32SaveDialog(const char* defaultName,
+                               void* ownerHwnd,
+                               const char* filter,
+                               const char* defExt,
+                               const char* requiredSuffix,
+                               const char* title) {
 #if defined(_WIN32)
     char fileBuf[4096]{};
     if (defaultName && defaultName[0] != '\0') {
@@ -65,18 +78,18 @@ std::string SaveOBJFileDialog(const char* defaultName, void* ownerHwnd) {
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(OPENFILENAMEA);
     ofn.hwndOwner = static_cast<HWND>(ownerHwnd);
-    ofn.lpstrFilter = "Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFilter = filter;
     ofn.lpstrFile = fileBuf;
     ofn.nMaxFile = static_cast<DWORD>(sizeof(fileBuf));
     ofn.nFilterIndex = 1;
-    ofn.lpstrDefExt = "obj";
-    ofn.lpstrTitle = "Export Wavefront .OBJ";
+    ofn.lpstrDefExt = defExt;
+    ofn.lpstrTitle = title;
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (::GetSaveFileNameA(&ofn)) {
         std::string chosen(fileBuf);
-        if (!chosen.empty() && !hasObjSuffixCI(chosen)) {
-            chosen += ".obj";
+        if (!chosen.empty() && requiredSuffix && !hasSuffixCI(chosen, requiredSuffix)) {
+            chosen += requiredSuffix;
         }
         return chosen;
     }
@@ -84,8 +97,36 @@ std::string SaveOBJFileDialog(const char* defaultName, void* ownerHwnd) {
 #else
     (void)defaultName;
     (void)ownerHwnd;
+    (void)filter;
+    (void)defExt;
+    (void)requiredSuffix;
+    (void)title;
     return {};
 #endif
+}
+
+constexpr const char kObjFilter[] = "Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
+constexpr const char kProjFilter[] = "3DModeller Project (*.3dmproj)\0*.3dmproj\0All Files (*.*)\0*.*\0";
+
+}  // namespace
+
+std::string OpenOBJFileDialog(void* ownerHwnd) {
+    return runWin32OpenDialog(ownerHwnd, kObjFilter, "obj", "Import Wavefront .OBJ Model");
+}
+
+std::string SaveOBJFileDialog(const char* defaultName, void* ownerHwnd) {
+    return runWin32SaveDialog(defaultName, ownerHwnd, kObjFilter, "obj", ".obj",
+                              "Export Wavefront .OBJ");
+}
+
+std::string OpenProjectFileDialog(void* ownerHwnd) {
+    return runWin32OpenDialog(ownerHwnd, kProjFilter, "3dmproj",
+                              "Open 3DModeller Project (.3dmproj)");
+}
+
+std::string SaveProjectFileDialog(const char* defaultName, void* ownerHwnd) {
+    return runWin32SaveDialog(defaultName, ownerHwnd, kProjFilter, "3dmproj", ".3dmproj",
+                              "Save 3DModeller Project (.3dmproj)");
 }
 
 }  // namespace v3d

@@ -24,8 +24,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -476,6 +478,216 @@ inline bool ExportSceneToOBJ(const std::string& filename,
                              const std::vector<SceneObject>& objects,
                              const PrimitiveLibrary& lib) {
     return ExportObjectsToOBJ(filename, objects, lib);
+}
+
+// ---------------------------------------------------------------------------
+// Visual3D Project Persistence (`.3dmproj` Save / Load)
+// ---------------------------------------------------------------------------
+inline const char* projectTypeToken(PrimitiveType t) {
+    switch (t) {
+        case PrimitiveType::Cube: return "CUBE";
+        case PrimitiveType::Capsule: return "CAPSULE";
+        case PrimitiveType::Cylinder: return "CYLINDER";
+        case PrimitiveType::Torus: return "RING";
+        case PrimitiveType::ImportedObj: return "IMPORTED_OBJ";
+        default: return "CUBE";
+    }
+}
+
+inline bool parseProjectTypeToken(const std::string& tok, PrimitiveType& outType) {
+    if (tok == "CUBE") { outType = PrimitiveType::Cube; return true; }
+    if (tok == "CAPSULE") { outType = PrimitiveType::Capsule; return true; }
+    if (tok == "CYLINDER") { outType = PrimitiveType::Cylinder; return true; }
+    if (tok == "RING") { outType = PrimitiveType::Torus; return true; }
+    if (tok == "IMPORTED_OBJ") { outType = PrimitiveType::ImportedObj; return true; }
+    return false;
+}
+
+inline std::string escapeProjectPath(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size() + 4);
+    out.push_back('"');
+    for (char c : raw) {
+        if (c == '\\' || c == '"') out.push_back('\\');
+        out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
+
+inline bool parseQuotedProjectPath(const std::string& rest, std::string& outPath) {
+    const size_t openPos = rest.find('"');
+    if (openPos == std::string::npos) return false;
+    outPath.clear();
+    bool closed = false;
+    for (size_t i = openPos + 1; i < rest.size(); ++i) {
+        const char c = rest[i];
+        if (c == '\\' && i + 1 < rest.size()) {
+            const char nxt = rest[i + 1];
+            if (nxt == '\\' || nxt == '"') {
+                outPath.push_back(nxt);
+                ++i;
+            } else {
+                // Tolerate unescaped Windows drive separators in hand-edited files
+                outPath.push_back(c);
+            }
+        } else if (c == '"') {
+            closed = true;
+            break;
+        } else {
+            outPath.push_back(c);
+        }
+    }
+    return closed;
+}
+
+inline bool SaveProjectToFile(const std::string& filename,
+                              const std::vector<SceneObject>& objects,
+                              int nextGroupId) {
+    std::ofstream out(filename);
+    if (!out.is_open()) return false;
+
+    const int safeNextGroupId = std::max(1, nextGroupId);
+    out << "NEXT_GROUP_ID " << safeNextGroupId << "\n";
+    out << std::fixed << std::setprecision(6);
+
+    for (const SceneObject& obj : objects) {
+        const Quaternion q = QuaternionFromMatrix(obj.transform.rotMatrix);
+        const Vector3 eulerRad = QuaternionToEuler(q);
+        const float rx = eulerRad.x * RAD2DEG;
+        const float ry = eulerRad.y * RAD2DEG;
+        const float rz = eulerRad.z * RAD2DEG;
+
+        const std::string srcPath =
+            (obj.type == PrimitiveType::ImportedObj && obj.importedModel)
+                ? obj.importedModel->sourcePath
+                : std::string();
+
+        out << projectTypeToken(obj.type) << " "
+            << obj.transform.position.x << " " << obj.transform.position.y << " " << obj.transform.position.z << " "
+            << rx << " " << ry << " " << rz << " "
+            << obj.transform.scale.x << " " << obj.transform.scale.y << " " << obj.transform.scale.z << " "
+            << static_cast<unsigned int>(obj.color.r) << " "
+            << static_cast<unsigned int>(obj.color.g) << " "
+            << static_cast<unsigned int>(obj.color.b) << " "
+            << static_cast<unsigned int>(obj.color.a) << " "
+            << obj.groupId << " "
+            << (obj.isSelected ? 1 : 0) << " "
+            << escapeProjectPath(srcPath) << "\n";
+    }
+    return out.good();
+}
+
+using ObjAssetLoaderFn = std::function<std::shared_ptr<ImportedModelAsset>(const std::string&)>;
+
+inline bool LoadProjectFromFile(
+    const std::string& filename,
+    std::vector<SceneObject>& outObjects,
+    int& outNextGroupId,
+    int& outMissingObjCount,
+    ObjAssetLoaderFn objLoader = [](const std::string& p) {
+        return LoadNormalizedOBJAsset(p, 2.0f);
+    }) {
+    outMissingObjCount = 0;
+    std::ifstream in(filename);
+    if (!in.is_open()) return false;
+
+    std::vector<SceneObject> parsed;
+    int headerNextGroupId = -1;
+    int maxGroupId = 0;
+    uint32_t nextLocalId = 1;
+    bool parsedHeader = false;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t firstNonWs = line.find_first_not_of(" \t");
+        if (firstNonWs == std::string::npos) continue;
+        if (line[firstNonWs] == '#') continue;
+
+        std::istringstream iss(line.substr(firstNonWs));
+        if (!parsedHeader) {
+            std::string firstTok;
+            if (!(iss >> firstTok)) return false;
+            if (firstTok == "NEXT_GROUP_ID") {
+                if (!(iss >> headerNextGroupId) || headerNextGroupId < 1) return false;
+            } else {
+                try {
+                    size_t consumed = 0;
+                    headerNextGroupId = std::stoi(firstTok, &consumed);
+                    if (consumed != firstTok.size() || headerNextGroupId < 1) return false;
+                } catch (...) {
+                    return false;
+                }
+            }
+            parsedHeader = true;
+            continue;
+        }
+
+        std::string typeTok;
+        float px = 0.f, py = 0.f, pz = 0.f;
+        float rx = 0.f, ry = 0.f, rz = 0.f;
+        float sx = 1.f, sy = 1.f, sz = 1.f;
+        int cr = 255, cg = 255, cb = 255, ca = 255;
+        int groupId = -1;
+        int isSel = 0;
+        if (!(iss >> typeTok >> px >> py >> pz >> rx >> ry >> rz >> sx >> sy >> sz
+                  >> cr >> cg >> cb >> ca >> groupId >> isSel)) {
+            return false;
+        }
+
+        PrimitiveType pType = PrimitiveType::Cube;
+        if (!parseProjectTypeToken(typeTok, pType)) return false;
+
+        std::string remainder;
+        std::getline(iss, remainder);
+        std::string srcPath;
+        if (!parseQuotedProjectPath(remainder, srcPath)) {
+            if (pType == PrimitiveType::ImportedObj) return false;
+            srcPath.clear();
+        }
+
+        SceneObject obj{};
+        obj.id = nextLocalId++;
+        obj.type = pType;
+        obj.transform.position = {px, py, pz};
+        obj.transform.rotationDeg = {rx, ry, rz};
+        const Quaternion q = QuaternionFromEuler(rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD);
+        obj.transform.rotMatrix = QuaternionToMatrix(q);
+        obj.transform.scale = {
+            std::max(0.05f, sx),
+            std::max(0.05f, sy),
+            std::max(0.05f, sz),
+        };
+        obj.anchorTransform = obj.transform;
+        obj.color = Color{
+            static_cast<unsigned char>(std::clamp(cr, 0, 255)),
+            static_cast<unsigned char>(std::clamp(cg, 0, 255)),
+            static_cast<unsigned char>(std::clamp(cb, 0, 255)),
+            static_cast<unsigned char>(std::clamp(ca, 0, 255)),
+        };
+        obj.groupId = (groupId >= 0) ? groupId : -1;
+        obj.isSelected = (isSel != 0);
+
+        if (pType == PrimitiveType::ImportedObj) {
+            obj.importedModel = objLoader ? objLoader(srcPath) : nullptr;
+            if (!obj.importedModel) {
+                ++outMissingObjCount;
+                continue;
+            }
+        }
+
+        if (obj.groupId >= 0) {
+            maxGroupId = std::max(maxGroupId, obj.groupId);
+        }
+        parsed.push_back(std::move(obj));
+    }
+
+    if (!parsedHeader) return false;
+
+    outObjects = std::move(parsed);
+    outNextGroupId = std::max({1, headerNextGroupId, maxGroupId + 1});
+    return true;
 }
 
 }  // namespace v3d

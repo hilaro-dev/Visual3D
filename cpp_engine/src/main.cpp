@@ -190,7 +190,7 @@ public:
         deleteHoldTimer_ = 0.0f;
         deleteCooldownTimer_ = 0.0f;
         measurementBadge_ = "IDLE [SAFE] // 1:MOVE 2:SIZE 3:ROT 4:CLR 5:GRP TU:SPAWN TD:DEL";
-        statusLine_ = "Drag & Drop .OBJ onto window | G: Group | U: Ungroup | C: Clear | R: Reset";
+        statusLine_ = "TAB: AR/3D View | S: Export Scene .OBJ | Drag & Drop .3dmproj/.obj | G: Group | R: Reset";
     }
 
     SceneObject& spawnObject(PrimitiveType type, Vector3 pos, Color col) {
@@ -250,6 +250,25 @@ public:
             activeObjectIdx_ = static_cast<int>(objects_.size()) - 1;
             statusLine_ = std::string("SPAWNED ") + primitiveName(activeShape_);
         }
+        const bool ctrlHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        if (IsKeyPressed(KEY_P) || (ctrlHeld && IsKeyPressed(KEY_S))) {
+            std::string savePath;
+            runModalDialogGuard(udp, [&]() {
+                savePath = SaveProjectFileDialog("untitled.3dmproj", GetWindowHandle());
+            });
+            if (!savePath.empty()) {
+                saveProjectFile(savePath);
+            }
+        }
+        if (IsKeyPressed(KEY_O)) {
+            std::string openPath;
+            runModalDialogGuard(udp, [&]() {
+                openPath = OpenProjectFileDialog(GetWindowHandle());
+            });
+            if (!openPath.empty()) {
+                loadProjectFile(openPath);
+            }
+        }
         if (IsKeyPressed(KEY_I)) {
             std::string openPath;
             runModalDialogGuard(udp, [&]() {
@@ -287,7 +306,7 @@ public:
                 }
             }
         }
-        if (IsKeyPressed(KEY_S)) {
+        if (!ctrlHeld && IsKeyPressed(KEY_S)) {
             if (objects_.empty()) {
                 showToast("SCENE IS EMPTY: NOTHING TO EXPORT", true);
             } else {
@@ -349,19 +368,23 @@ public:
 
         handleKeyboardShortcuts(udp);
 
-        // Drag-and-drop external .OBJ importing onto the application window
+        // Drag-and-drop .3dmproj projects and external .obj meshes onto the application window
         if (!dialogOpen_ && IsFileDropped()) {
             FilePathList dropped = LoadDroppedFiles();
-            bool anyNonObj = false;
+            bool anyUnsupported = false;
             for (unsigned int i = 0; i < dropped.count; ++i) {
-                if (dropped.paths[i] && hasObjExtension(dropped.paths[i])) {
-                    importOBJFile(dropped.paths[i]);
+                const char* p = dropped.paths[i];
+                if (!p) continue;
+                if (hasExtensionCI(p, ".3dmproj")) {
+                    loadProjectFile(p);
+                } else if (hasExtensionCI(p, ".obj")) {
+                    importOBJFile(p);
                 } else {
-                    anyNonObj = true;
+                    anyUnsupported = true;
                 }
             }
-            if (anyNonObj) {
-                showToast("DRAG & DROP: ONLY .OBJ FILES ARE SUPPORTED", true);
+            if (anyUnsupported) {
+                showToast("DRAG & DROP: ONLY .3DMPROJ AND .OBJ FILES SUPPORTED", true);
             }
             UnloadDroppedFiles(dropped);
         }
@@ -531,13 +554,59 @@ private:
         statusLine_ = msg;
     }
 
-    static bool hasObjExtension(const std::string& path) {
-        if (path.size() < 4) return false;
-        const size_t n = path.size();
-        return std::tolower(static_cast<unsigned char>(path[n - 4])) == '.' &&
-               std::tolower(static_cast<unsigned char>(path[n - 3])) == 'o' &&
-               std::tolower(static_cast<unsigned char>(path[n - 2])) == 'b' &&
-               std::tolower(static_cast<unsigned char>(path[n - 1])) == 'j';
+    static bool hasExtensionCI(const std::string& path, const char* ext) {
+        const std::string suffix(ext);
+        if (path.size() < suffix.size()) return false;
+        const size_t start = path.size() - suffix.size();
+        for (size_t i = 0; i < suffix.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(path[start + i])) !=
+                std::tolower(static_cast<unsigned char>(suffix[i]))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool saveProjectFile(const std::string& filepath) {
+        if (SaveProjectToFile(filepath, objects_, nextGroupId_)) {
+            showToast("PROJECT SAVED -> " + extractFilename(filepath), false);
+            return true;
+        }
+        showToast("ERROR: FAILED TO SAVE " + extractFilename(filepath), true);
+        return false;
+    }
+
+    bool loadProjectFile(const std::string& filepath) {
+        std::vector<SceneObject> loaded;
+        int loadedNextGroupId = 1;
+        int missingObjCount = 0;
+        if (!LoadProjectFromFile(filepath, loaded, loadedNextGroupId, missingObjCount)) {
+            showToast("LOAD FAILED: " + extractFilename(filepath), true);
+            return false;
+        }
+        objects_.clear();
+        objects_ = std::move(loaded);
+        nextGroupId_ = loadedNextGroupId;
+        nextId_ = static_cast<uint32_t>(objects_.size()) + 1;
+        deleteHoldTimer_ = 0.0f;
+        deleteCooldownTimer_ = 0.0f;
+        activeObjectIdx_ = -1;
+        for (size_t i = 0; i < objects_.size(); ++i) {
+            if (objects_[i].isSelected) {
+                activeObjectIdx_ = static_cast<int>(i);
+                break;
+            }
+        }
+        if (activeObjectIdx_ < 0 && !objects_.empty()) {
+            activeObjectIdx_ = 0;
+        }
+        std::string msg = "PROJECT LOADED -> " + extractFilename(filepath) +
+                          " (" + std::to_string(objects_.size()) + " objects)";
+        if (missingObjCount > 0) {
+            msg += " [" + std::to_string(missingObjCount) + " missing .OBJ skipped]";
+        }
+        showToast(msg, false);
+        return true;
     }
 
     template <typename Fn>
@@ -1643,7 +1712,7 @@ private:
 
         // 4. Compact Shortcut Legend + Bottom-Left Left-Hand Mode Bar (0..7)
         const char* shortcutLegend =
-            "[TAB] AR/3D View  |  [I] Import .OBJ  |  [E] Export Group .OBJ  |  [S] Export Scene .OBJ";
+            "[P] Save Project (.3dmproj)  |  [O] Open Project  |  [I] Import .OBJ  |  [E] Export Group .OBJ";
         const int legFont = 13;
         const int legW = MeasureText(shortcutLegend, legFont) + 20;
         const int legY = sh - 98;
