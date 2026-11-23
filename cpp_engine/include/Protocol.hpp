@@ -137,7 +137,7 @@ inline bool parseTelemetry(const uint8_t* data, size_t size, TelemetryPacket& ou
     if (out.left_mode > 5) out.left_mode = 0;
     if (out.right_axis < 1 || out.right_axis > 3) out.right_axis = 1;
     out.hands[0].contactMask &= 0x07;
-    out.hands[1].contactMask = 0;
+    out.hands[1].contactMask &= 0x07;  // Right Hand carries additive R/G/B pinch bitmask in RECOLOR mode
     return true;
 }
 

@@ -76,6 +76,8 @@ MODEL_COMPLEXITY: int = 0
 MODE_DEBOUNCE_SEC: float = 0.150   # 150ms debounce timer for Left Hand mode switching
 PINCH_ENGAGE_PX: float = 32.0      # Engage Right Thumb+Finger pinch when < 32 px
 PINCH_RELEASE_PX: float = 46.0     # Release Right Thumb+Finger pinch when > 46 px
+RECOLOR_ENGAGE_PX: float = 38.0    # Engage additive RGB channel when < 38 px
+RECOLOR_RELEASE_PX: float = 48.0   # Release additive RGB channel when > 48 px
 CHROMA_DISTANCE: float = 0.048     # Normalized proximity for Left-Hand RECOLOR channels
 
 # Left Hand Mode Enum (matches Protocol.hpp :: LeftMode)
@@ -150,13 +152,13 @@ HAND_CONNECTIONS = (
 
 MASK_COLORS = {
     0b000: (0.15, 0.90, 1.00),
-    0b001: (1.00, 0.15, 0.20),  # Red
-    0b010: (0.15, 0.95, 0.35),  # Green
-    0b100: (0.20, 0.50, 1.00),  # Blue
-    0b011: (1.00, 0.90, 0.15),  # Yellow
-    0b110: (0.15, 0.95, 0.95),  # Cyan
-    0b101: (0.95, 0.20, 0.90),  # Magenta
-    0b111: (1.00, 1.00, 1.00),  # White
+    0b001: (1.00, 0.00, 0.00),  # Red     (255,   0,   0) -- Index + Thumb
+    0b010: (0.00, 1.00, 0.00),  # Green   (  0, 255,   0) -- Middle + Thumb
+    0b100: (0.00, 0.00, 1.00),  # Blue    (  0,   0, 255) -- Ring + Thumb
+    0b011: (1.00, 1.00, 0.00),  # Yellow  (255, 255,   0) -- Index + Middle
+    0b110: (0.00, 1.00, 1.00),  # Cyan    (  0, 255, 255) -- Middle + Ring
+    0b101: (1.00, 0.00, 1.00),  # Magenta (255,   0, 255) -- Ring + Index
+    0b111: (1.00, 1.00, 1.00),  # White   (255, 255, 255) -- Index + Middle + Ring
 }
 
 HAND_LANDMARKER_URL = (
@@ -343,6 +345,7 @@ class ModeClutchEngine:
         self.left_mode: int = MODE_IDLE
         self.right_axis: int = AXIS_X
         self.is_pinching: bool = False
+        self.recolor_latched: List[bool] = [False, False, False]  # [Index(R), Middle(G), Ring(B)]
         self.active_shape: int = 0
         self.smoothed_palm_size: float = 0.18
         self.cursor_3d: Tuple[float, float, float] = (0.0, 0.0, 0.18)
@@ -440,7 +443,7 @@ class ModeClutchEngine:
             # Safe fallback when Left Hand leaves frame: lock to IDLE after 150ms
             self.left_mode = self.left_mode_debouncer.update(MODE_IDLE, now)
 
-        # --- 2. Right Hand: Direct Finger-to-Thumb Pinch Axis & Hysteresis Clutch ---
+        # --- 2. Right Hand: Single-Axis Pinch Clutch OR Multi-Finger RECOLOR Mixing ---
         if right_lm is not None:
             right_f = self._analyze_single_hand(1, right_lm)
             dist_index, dist_middle, dist_ring = right_f.thumb_tip_dists_px
@@ -450,30 +453,68 @@ class ModeClutchEngine:
                 (AXIS_Z, dist_ring),
             )
 
-            if not self.is_pinching:
-                # Hover Preview & Single Active Pinch Selection (< 32px):
-                # Preview whichever of Index/Middle/Ring is closest to Thumb Tip (4).
-                closest_axis, min_dist = min(axis_dists, key=lambda item: item[1])
-                self.right_axis = closest_axis
-                right_f.pinch_px = min_dist
-                if min_dist < self.engage_px:
-                    self.is_pinching = True
-            else:
-                # Lock `right_axis` to the initiating finger and monitor ONLY its
-                # distance to the Thumb Tip until it exceeds `release_px` (> 46px).
-                if self.right_axis == AXIS_X:
-                    locked_dist = dist_index
-                elif self.right_axis == AXIS_Y:
-                    locked_dist = dist_middle
-                else:
-                    locked_dist = dist_ring
+            # Evaluate all 3 Right-Hand RGB channels simultaneously and independently
+            # with hysteresis (< 38px engage, > 48px release):
+            #   bit 0 (R) = Index(8)  vs Thumb(4)
+            #   bit 1 (G) = Middle(12) vs Thumb(4)
+            #   bit 2 (B) = Ring(16)  vs Thumb(4)
+            recolor_mask = 0
+            for ch, dist_px in enumerate((dist_index, dist_middle, dist_ring)):
+                if self.recolor_latched[ch]:
+                    if dist_px > RECOLOR_RELEASE_PX:
+                        self.recolor_latched[ch] = False
+                elif dist_px < RECOLOR_ENGAGE_PX:
+                    self.recolor_latched[ch] = True
+                if self.recolor_latched[ch]:
+                    recolor_mask |= 1 << ch
+            right_f.contact_mask = recolor_mask
 
-                right_f.pinch_px = locked_dist
-                if locked_dist > self.release_px:
-                    self.is_pinching = False
-                    closest_axis, min_dist = min(axis_dists, key=lambda item: item[1])
+            if self.left_mode == MODE_RECOLOR:
+                # RECOLOR MODE: Multi-finger additive RGB mixing (simultaneous channels)
+                self.is_pinching = (recolor_mask != 0)
+                if recolor_mask != 0:
+                    self.last_color = MASK_COLORS[recolor_mask]
+                    right_f.pinch_px = min(
+                        d for bit, d in enumerate((dist_index, dist_middle, dist_ring))
+                        if (recolor_mask & (1 << bit))
+                    )
+                else:
+                    right_f.pinch_px = min(dist_index, dist_middle, dist_ring)
+                right_f.color = self.last_color
+                if left_f is not None:
+                    left_f.color = self.last_color
+            else:
+                # MOVE / RESIZE / ROTATE / SPAWN: Single-finger pinch axis & clutch
+                closest_axis, min_dist = min(axis_dists, key=lambda item: item[1])
+                if not self.is_pinching:
                     self.right_axis = closest_axis
                     right_f.pinch_px = min_dist
+                    if min_dist < self.engage_px:
+                        self.is_pinching = True
+                else:
+                    if self.right_axis == AXIS_X:
+                        locked_dist = dist_index
+                    elif self.right_axis == AXIS_Y:
+                        locked_dist = dist_middle
+                    else:
+                        locked_dist = dist_ring
+
+                    # Allow seamless handoff if another finger pinches much deeper (< 32px
+                    # and > 6px closer than the currently latched finger) so Thumb+Ring
+                    # or Thumb+Middle cannot get trapped on Thumb+Index while crossing over.
+                    if (
+                        closest_axis != self.right_axis
+                        and min_dist < self.engage_px
+                        and (min_dist + 6.0) < locked_dist
+                    ):
+                        self.right_axis = closest_axis
+                        locked_dist = min_dist
+
+                    right_f.pinch_px = locked_dist
+                    if locked_dist > self.release_px:
+                        self.is_pinching = False
+                        self.right_axis = closest_axis
+                        right_f.pinch_px = min_dist
 
             right_f.pinch = self.is_pinching
             right_f.gesture = self.right_axis
@@ -505,15 +546,8 @@ class ModeClutchEngine:
             self.cursor_3d = (float(wx), float(wy), float(self.smoothed_palm_size))
         else:
             self.is_pinching = False
+            self.recolor_latched = [False, False, False]
             self.palm_size_ema.reset()
-
-        # In RECOLOR mode (4), use Right Hand Y-height or Left-Hand finger contacts to cycle palette
-        if self.left_mode == MODE_RECOLOR and right_lm is not None and self.is_pinching:
-            # Map cursor X/Y to smooth palette selection
-            hue_idx = int(np.clip((right_lm[INDEX_TIP, 0]) * 7.0, 0, 6)) + 1
-            self.last_color = MASK_COLORS.get(hue_idx, (0.15, 0.90, 1.00))
-            if left_f is not None:
-                left_f.color = self.last_color
 
         return left_f, right_f
 

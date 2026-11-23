@@ -63,18 +63,15 @@ inline float snapToStep(float value, float step) {
 struct ObjectTransform {
     Vector3 position{0.0f, 0.0f, 0.0f};      // World units (1.0f = 10 cm)
     Vector3 scale{1.0f, 1.0f, 1.0f};         // Scale factors (1.0f = 10 cm base size)
-    Vector3 rotationDeg{0.0f, 0.0f, 0.0f};   // Euler angles in degrees (Pitch X, Yaw Y, Roll Z)
+    Vector3 rotationDeg{0.0f, 0.0f, 0.0f};   // Tracked Euler angle readouts (degrees)
+    Matrix rotMatrix = MatrixIdentity();     // World-space rotation matrix (1-to-1 X/Y/Z axes)
 
-    /// Builds the composite Raylib transform Matrix: T * Rz * Ry * Rx * S
+    /// Builds the composite Raylib transform Matrix: T * R * S
     /// using `MatrixMultiply` from `raymath.h`.
     Matrix toMatrix() const {
         const Matrix matScale = MatrixScale(scale.x, scale.y, scale.z);
-        const Matrix matRotX = MatrixRotateX(rotationDeg.x * DEG2RAD);
-        const Matrix matRotY = MatrixRotateY(rotationDeg.y * DEG2RAD);
-        const Matrix matRotZ = MatrixRotateZ(rotationDeg.z * DEG2RAD);
-        const Matrix matRot = MatrixMultiply(MatrixMultiply(matRotX, matRotY), matRotZ);
         const Matrix matTrans = MatrixTranslate(position.x, position.y, position.z);
-        return MatrixMultiply(MatrixMultiply(matScale, matRot), matTrans);
+        return MatrixMultiply(MatrixMultiply(matScale, rotMatrix), matTrans);
     }
 };
 
@@ -257,10 +254,7 @@ inline bool ExportSceneToOBJ(const std::string& filename,
         const Matrix matScale = MatrixScale(obj.transform.scale.x,
                                             obj.transform.scale.y,
                                             obj.transform.scale.z);
-        const Matrix matRotX = MatrixRotateX(obj.transform.rotationDeg.x * DEG2RAD);
-        const Matrix matRotY = MatrixRotateY(obj.transform.rotationDeg.y * DEG2RAD);
-        const Matrix matRotZ = MatrixRotateZ(obj.transform.rotationDeg.z * DEG2RAD);
-        const Matrix matRot = MatrixMultiply(MatrixMultiply(matRotX, matRotY), matRotZ);
+        const Matrix matRot = obj.transform.rotMatrix;
         const Matrix matTrans = MatrixTranslate(obj.transform.position.x,
                                                 obj.transform.position.y,
                                                 obj.transform.position.z);

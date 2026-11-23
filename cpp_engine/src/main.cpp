@@ -102,6 +102,26 @@ inline Color axisColor(proto::RightAxis a) {
     }
 }
 
+inline Color recolorColorFromMask(uint8_t mask) {
+    const unsigned char r = (mask & proto::kMiddleRed) ? 255 : 0;  // bit 0: Right Index (R)
+    const unsigned char g = (mask & proto::kRingGreen) ? 255 : 0;  // bit 1: Right Middle (G)
+    const unsigned char b = (mask & proto::kPinkyBlue) ? 255 : 0;  // bit 2: Right Ring (B)
+    return Color{r, g, b, 255};
+}
+
+inline const char* recolorNameFromMask(uint8_t mask) {
+    switch (mask & 0x07) {
+        case 0b001: return "RED";
+        case 0b010: return "GREEN";
+        case 0b100: return "BLUE";
+        case 0b011: return "YELLOW";
+        case 0b110: return "CYAN";
+        case 0b101: return "MAGENTA";
+        case 0b111: return "WHITE";
+        default: return "CYAN";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mode + Clutch Spatial Modeler Application
 // ---------------------------------------------------------------------------
@@ -147,6 +167,7 @@ public:
         };
         obj.transform.scale = {1.0f, 1.0f, 1.0f};
         obj.transform.rotationDeg = {0.0f, 0.0f, 0.0f};
+        obj.transform.rotMatrix = MatrixIdentity();
         obj.anchorTransform = obj.transform;
         obj.color = col;
         obj.groupId = -1;
@@ -279,7 +300,7 @@ public:
             for (int s = 0; s < 2; ++s) {
                 hands_[s] = pkt.hands[s];
             }
-            if (hands_[0].isPresent()) {
+            if (leftMode_ != proto::LeftMode::Recolor && hands_[0].isPresent()) {
                 activeColor_ = Color{
                     static_cast<unsigned char>( std::clamp(hands_[0].color[0] * 255.f, 0.f, 255.f) ),
                     static_cast<unsigned char>( std::clamp(hands_[0].color[1] * 255.f, 0.f, 255.f) ),
@@ -353,6 +374,8 @@ private:
     bool hasKeyboardAxisOverride_ = false;
     PrimitiveType activeShape_ = PrimitiveType::Cube;
     Color activeColor_{38, 230, 255, 255};
+    uint8_t activeRecolorMask_ = 0;
+    std::string activeColorName_ = "CYAN";
 
     bool isPinching_ = false;
     bool wasPinching_ = false;
@@ -538,11 +561,25 @@ private:
                     break;
                 }
                 case proto::LeftMode::Rotate: {
-                    // Convert hand displacement to degrees (1.0 unit -> 45 deg) and snap to 15.0 deg
-                    const float rawDeg = axisRawDelta * 45.0f;
+                    // Use intuitive hand axis displacement mapped 1-to-1 to World X / Y / Z
+                    float rotDriver = axisRawDelta;
+                    if (rightAxis_ == proto::RightAxis::X) {
+                        rotDriver = (std::abs(rawDelta.y) > std::abs(rawDelta.x)) ? -rawDelta.y : rawDelta.x;
+                    } else if (rightAxis_ == proto::RightAxis::Y) {
+                        rotDriver = (std::abs(rawDelta.x) > std::abs(rawDelta.y)) ? rawDelta.x : rawDelta.y;
+                    } else if (rightAxis_ == proto::RightAxis::Z) {
+                        rotDriver = (std::abs(rawDelta.x) > std::abs(axisRawDelta)) ? -rawDelta.x : axisRawDelta;
+                    }
+                    const float rawDeg = rotDriver * 45.0f;
                     const float snappedDeg = snapToStep(rawDeg, kSnapRotateStepDeg);
+                    Vector3 axisVec{1.0f, 0.0f, 0.0f};
+                    if (rightAxis_ == proto::RightAxis::Y) axisVec = {0.0f, 1.0f, 0.0f};
+                    else if (rightAxis_ == proto::RightAxis::Z) axisVec = {0.0f, 0.0f, 1.0f};
+                    const Matrix deltaRot = MatrixRotate(axisVec, snappedDeg * DEG2RAD);
                     for (int idx : targets) {
                         objects_[idx].transform = objects_[idx].anchorTransform;
+                        objects_[idx].transform.rotMatrix =
+                            MatrixMultiply(objects_[idx].anchorTransform.rotMatrix, deltaRot);
                         if (rightAxis_ == proto::RightAxis::X)
                             objects_[idx].transform.rotationDeg.x += snappedDeg;
                         else if (rightAxis_ == proto::RightAxis::Y)
@@ -555,11 +592,17 @@ private:
                     break;
                 }
                 case proto::LeftMode::Recolor: {
-                    for (int idx : targets) {
-                        objects_[idx].color = activeColor_;
+                    activeRecolorMask_ = hands_[1].isPresent() ? (hands_[1].contactMask & 0x07) : 0;
+                    if (activeRecolorMask_ != 0) {
+                        activeColor_ = recolorColorFromMask(activeRecolorMask_);
+                        activeColorName_ = recolorNameFromMask(activeRecolorMask_);
+                        for (int idx : targets) {
+                            objects_[idx].color = activeColor_;
+                        }
                     }
-                    std::snprintf(badge, sizeof(badge), "RECOLOR [RGB]: (%u, %u, %u)",
-                                  activeColor_.r, activeColor_.g, activeColor_.b);
+                    std::snprintf(badge, sizeof(badge), "RECOLOR: %s (%u, %u, %u)",
+                                  activeColorName_.c_str(), activeColor_.r, activeColor_.g,
+                                  activeColor_.b);
                     measurementBadge_ = badge;
                     break;
                 }
@@ -576,11 +619,16 @@ private:
             }
         }
 
-        // 4. Hover Readout when Clutch is Released
+        // 4. Hover / Locked Color Readout when Clutch is Released
         if (!isPinching_) {
             char badge[128];
             if (leftMode_ == proto::LeftMode::Idle) {
                 std::snprintf(badge, sizeof(badge), "IDLE [SAFE // LOCKED]  |  AXIS: %s", axStr);
+            } else if (leftMode_ == proto::LeftMode::Recolor) {
+                activeRecolorMask_ = 0;
+                std::snprintf(badge, sizeof(badge), "RECOLOR [LOCKED]: %s (%u, %u, %u)",
+                              activeColorName_.c_str(), activeColor_.r, activeColor_.g,
+                              activeColor_.b);
             } else if (leftMode_ == proto::LeftMode::SpawnGroup) {
                 std::snprintf(badge, sizeof(badge),
                               "SPAWN / GROUP [%s] @ (%.0f, %.0f, %.0f) cm // PINCH TO CONFIRM",
@@ -761,15 +809,31 @@ private:
                 DrawCircleV(pts[i], isTip ? 4.5f : 3.0f, isTip ? YELLOW : WHITE);
             }
             if (s == 1) {
-                int activeTip = 8;
-                if (rightAxis_ == proto::RightAxis::Y) activeTip = 12;
-                else if (rightAxis_ == proto::RightAxis::Z) activeTip = 16;
-                const Color pCol = isPinching_ ? Color{255, 215, 50, 255} : Fade(axisColor(rightAxis_), 0.65f);
-                DrawLineEx(pts[4], pts[activeTip], isPinching_ ? 3.5f : 2.0f, pCol);
-                if (isPinching_) {
-                    DrawCircleLines(static_cast<int>((pts[4].x + pts[activeTip].x) * 0.5f),
-                                    static_cast<int>((pts[4].y + pts[activeTip].y) * 0.5f),
-                                    12.f, Color{255, 220, 60, 255});
+                if (leftMode_ == proto::LeftMode::Recolor) {
+                    const uint8_t cm = h.contactMask & 0x07;
+                    const int tips[3] = {8, 12, 16};
+                    const Color chCols[3] = {
+                        Color{255, 60, 70, 255},
+                        Color{60, 255, 110, 255},
+                        Color{65, 145, 255, 255},
+                    };
+                    for (int ch = 0; ch < 3; ++ch) {
+                        const bool active = (cm & (1 << ch)) != 0;
+                        DrawLineEx(pts[4], pts[tips[ch]], active ? 3.5f : 1.4f,
+                                   active ? chCols[ch] : Fade(chCols[ch], 0.35f));
+                        if (active) DrawCircleV(pts[tips[ch]], 7.5f, chCols[ch]);
+                    }
+                } else {
+                    int activeTip = 8;
+                    if (rightAxis_ == proto::RightAxis::Y) activeTip = 12;
+                    else if (rightAxis_ == proto::RightAxis::Z) activeTip = 16;
+                    const Color pCol = isPinching_ ? Color{255, 215, 50, 255} : Fade(axisColor(rightAxis_), 0.65f);
+                    DrawLineEx(pts[4], pts[activeTip], isPinching_ ? 3.5f : 2.0f, pCol);
+                    if (isPinching_) {
+                        DrawCircleLines(static_cast<int>((pts[4].x + pts[activeTip].x) * 0.5f),
+                                        static_cast<int>((pts[4].y + pts[activeTip].y) * 0.5f),
+                                        12.f, Color{255, 220, 60, 255});
+                    }
                 }
             }
         }
@@ -815,21 +879,33 @@ private:
                      obj.isSelected ? YELLOW : SKYBLUE);
         }
 
-        // 2. Top-Center Pill-Shaped Measurement Badge
+        // 2. Top-Center Pill-Shaped Measurement Badge (with RGB Swatch in RECOLOR mode)
         const int fontSize = 20;
+        const bool showSwatch = (leftMode_ == proto::LeftMode::Recolor);
+        const int swatchSpace = showSwatch ? 36 : 0;
         const int textW = MeasureText(measurementBadge_.c_str(), fontSize);
-        const int pillW = std::max(380, textW + 48);
+        const int pillW = std::max(380, textW + 48 + swatchSpace);
         const int pillH = 44;
+        const int pillX = (sw - pillW) / 2;
         const Rectangle pillRect{
-            static_cast<float>((sw - pillW) / 2),
+            static_cast<float>(pillX),
             16.0f,
             static_cast<float>(pillW),
             static_cast<float>(pillH),
         };
-        const Color borderCol = isPinching_ ? Color{255, 215, 65, 255} : axisColor(rightAxis_);
+        const Color borderCol = showSwatch ? activeColor_
+                                           : (isPinching_ ? Color{255, 215, 65, 255} : axisColor(rightAxis_));
         DrawRectangleRounded(pillRect, 0.5f, 16, Color{14, 22, 34, 235});
         DrawRectangleRoundedLinesEx(pillRect, 0.5f, 16, 2.5f, borderCol);
-        DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 28, fontSize, WHITE);
+        if (showSwatch) {
+            const int textStartX = pillX + 24;
+            DrawText(measurementBadge_.c_str(), textStartX, 28, fontSize, WHITE);
+            const Rectangle swatch{static_cast<float>(textStartX + textW + 14), 24.0f, 26.0f, 26.0f};
+            DrawRectangleRounded(swatch, 0.25f, 6, activeColor_);
+            DrawRectangleRoundedLinesEx(swatch, 0.25f, 6, 1.5f, WHITE);
+        } else {
+            DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 28, fontSize, WHITE);
+        }
 
         // 3. Top-Left Mode + Clutch Telemetry Card
         DrawRectangle(18, 18, 330, 152, Color{14, 20, 30, 220});
