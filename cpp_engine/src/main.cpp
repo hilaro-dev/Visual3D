@@ -181,8 +181,7 @@ public:
         spawnObject(PrimitiveType::Torus,    { 2.5f, 0.6f,  0.0f}, Color{255, 215, 65, 255});
 
         if (!objects_.empty()) {
-            selectedIdx_ = 0;
-            objects_[0].isSelected = true;
+            activeObjectIdx_ = 0;
         }
         deleteHoldTimer_ = 0.0f;
         deleteCooldownTimer_ = 0.0f;
@@ -243,10 +242,8 @@ public:
             statusLine_ = "UNGROUPED ALL OBJECTS";
         }
         if (IsKeyPressed(KEY_SPACE)) {
-            for (auto& o : objects_) o.isSelected = false;
-            SceneObject& spawned = spawnObject(activeShape_, cursor3D_, activeColor_);
-            spawned.isSelected = true;
-            selectedIdx_ = static_cast<int>(objects_.size()) - 1;
+            spawnObject(activeShape_, cursor3D_, activeColor_);
+            activeObjectIdx_ = static_cast<int>(objects_.size()) - 1;
             statusLine_ = std::string("SPAWNED ") + primitiveName(activeShape_);
         }
         if (IsKeyPressed(KEY_E)) {
@@ -260,7 +257,7 @@ public:
         }
         if (IsKeyPressed(KEY_C)) {
             objects_.clear();
-            selectedIdx_ = -1;
+            activeObjectIdx_ = -1;
             deleteHoldTimer_ = 0.0f;
             deleteCooldownTimer_ = 0.0f;
             statusLine_ = "SCENE CLEARED";
@@ -408,7 +405,7 @@ private:
     std::vector<SceneObject> objects_;
     uint32_t nextId_ = 1;
     int nextGroupId_ = 1;
-    int selectedIdx_ = -1;
+    int activeObjectIdx_ = -1;
 
     ViewportMode viewportMode_ = ViewportMode::Studio3D;
     proto::LeftMode leftMode_ = proto::LeftMode::Idle;
@@ -449,7 +446,7 @@ private:
     // --- Helper: find object closest to 3D cursor --------------------------
     // Measures 2D (X, Y) distance + 0.25-weighted Z distance so objects shifted
     // forward/backward along the Z-axis remain easy to hover and select.
-    int findHoveredObject(Vector3 pos, float maxDist = 1.35f) const {
+    int findClosestObjectToCursor(Vector3 pos, float maxDist = 1.35f) const {
         int best = -1;
         float bestD = maxDist;
         for (size_t i = 0; i < objects_.size(); ++i) {
@@ -466,34 +463,101 @@ private:
         return best;
     }
 
-    // Returns indices of all objects that should move together (the target object
-    // plus every object sharing its `groupId >= 0`).
-    std::vector<int> collectTargetSet(int primaryIdx) const {
+    static bool isTargetLockedMode(proto::LeftMode m) {
+        return m == proto::LeftMode::Move ||
+               m == proto::LeftMode::Resize ||
+               m == proto::LeftMode::Rotate ||
+               m == proto::LeftMode::Recolor ||
+               m == proto::LeftMode::Delete;
+    }
+
+    // Returns either `{idx}` (if ungrouped) or all members sharing `objects_[idx].groupId`.
+    // Never scans `isSelected` across unrelated objects.
+    std::vector<int> collectGroupMembers(int idx) const {
         std::vector<int> indices;
-        if (primaryIdx < 0 || primaryIdx >= static_cast<int>(objects_.size())) return indices;
-        const int gid = objects_[primaryIdx].groupId;
+        if (idx < 0 || idx >= static_cast<int>(objects_.size())) return indices;
+        const int gid = objects_[idx].groupId;
         if (gid >= 0) {
             for (size_t i = 0; i < objects_.size(); ++i) {
                 if (objects_[i].groupId == gid) indices.push_back(static_cast<int>(i));
             }
         } else {
-            indices.push_back(primaryIdx);
+            indices.push_back(idx);
         }
         return indices;
+    }
+
+    // Returns all target object indices for transform/recolor/delete operations,
+    // propagating cleanly across shared `groupId` or active `GROUP` multi-selection.
+    std::vector<int> collectTransformTargets() const {
+        std::vector<int> indices;
+        auto addWithGroup = [&](int baseIdx) {
+            for (int m : collectGroupMembers(baseIdx)) indices.push_back(m);
+        };
+        if (activeObjectIdx_ >= 0 && activeObjectIdx_ < static_cast<int>(objects_.size())) {
+            addWithGroup(activeObjectIdx_);
+            if (objects_[activeObjectIdx_].isSelected) {
+                for (size_t i = 0; i < objects_.size(); ++i) {
+                    if (objects_[i].isSelected) addWithGroup(static_cast<int>(i));
+                }
+            }
+        } else {
+            for (size_t i = 0; i < objects_.size(); ++i) {
+                if (objects_[i].isSelected) addWithGroup(static_cast<int>(i));
+            }
+        }
+        std::sort(indices.begin(), indices.end());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+        return indices;
+    }
+
+    bool isObjectInActiveTarget(size_t idx) const {
+        const std::vector<int> targets = collectTransformTargets();
+        return std::find(targets.begin(), targets.end(), static_cast<int>(idx)) != targets.end();
+    }
+
+    bool isObjectInActiveHover(size_t idx) const {
+        if (activeObjectIdx_ < 0 || activeObjectIdx_ >= static_cast<int>(objects_.size()) ||
+            idx >= objects_.size()) {
+            return false;
+        }
+        const std::vector<int> hovered = collectGroupMembers(activeObjectIdx_);
+        return std::find(hovered.begin(), hovered.end(), static_cast<int>(idx)) != hovered.end();
+    }
+
+    static void drawHoverReticle2D(Vector2 center, Color col) {
+        constexpr float kArcSpans[4][2] = {
+            {15.0f, 75.0f}, {105.0f, 165.0f}, {195.0f, 255.0f}, {285.0f, 345.0f}
+        };
+        for (const auto& span : kArcSpans) {
+            DrawRing(center, 25.0f, 28.0f, span[0], span[1], 12, col);
+        }
+        constexpr float kTickRad = 30.0f;
+        constexpr float kTickOuter = 36.0f;
+        DrawLineEx({center.x - kTickOuter, center.y}, {center.x - kTickRad, center.y}, 2.0f, col);
+        DrawLineEx({center.x + kTickRad, center.y},   {center.x + kTickOuter, center.y}, 2.0f, col);
+        DrawLineEx({center.x, center.y - kTickOuter}, {center.x, center.y - kTickRad}, 2.0f, col);
+        DrawLineEx({center.x, center.y + kTickRad},   {center.x, center.y + kTickOuter}, 2.0f, col);
+    }
+
+    static void drawLockedHighlight2D(Vector2 center, Color col, bool activePinch) {
+        DrawRing(center, 27.0f, activePinch ? 32.5f : 31.0f, 0.0f, 360.0f, 48, col);
+        constexpr float kOffset = 35.0f;
+        constexpr float kArm = 11.0f;
+        const float thick = activePinch ? 3.2f : 2.6f;
+        for (int sx : {-1, 1}) {
+            for (int sy : {-1, 1}) {
+                const Vector2 corner{center.x + sx * kOffset, center.y + sy * kOffset};
+                DrawLineEx(corner, {corner.x - sx * kArm, corner.y}, thick, col);
+                DrawLineEx(corner, {corner.x, corner.y - sy * kArm}, thick, col);
+            }
+        }
     }
 
     int countSelectedObjects() const {
         return static_cast<int>(std::count_if(
             objects_.begin(), objects_.end(),
             [](const SceneObject& o) { return o.isSelected; }));
-    }
-
-    void syncSelectionToIndex(int idx) {
-        for (auto& o : objects_) o.isSelected = false;
-        if (idx < 0 || idx >= static_cast<int>(objects_.size())) return;
-        for (int memberIdx : collectTargetSet(idx)) {
-            objects_[memberIdx].isSelected = true;
-        }
     }
 
     BoundingBox computeWorldBoundingBox(const SceneObject& obj, float pad = 0.08f) const {
@@ -535,31 +599,21 @@ private:
     void executeGroupModeAction(proto::GroupAction action, int hovIdx) {
         switch (action) {
             case proto::GroupAction::SelectToggle: {
-                if (hovIdx < 0 || hovIdx >= static_cast<int>(objects_.size())) {
+                const int targetIdx =
+                    (hovIdx >= 0) ? hovIdx : findClosestObjectToCursor(cursor3D_);
+                if (targetIdx < 0 || targetIdx >= static_cast<int>(objects_.size())) {
                     statusLine_ = "GROUP SELECT: HOVER CURSOR NEAR AN OBJECT FIRST";
                     return;
                 }
-                const bool nextSel = !objects_[hovIdx].isSelected;
-                const std::vector<int> targets = collectTargetSet(hovIdx);
-                for (int idx : targets) {
+                const bool nextSel = !objects_[targetIdx].isSelected;
+                const std::vector<int> toggleSet = collectGroupMembers(targetIdx);
+                for (int idx : toggleSet) {
                     objects_[idx].isSelected = nextSel;
                 }
-                if (nextSel) {
-                    selectedIdx_ = hovIdx;
-                } else if (selectedIdx_ >= 0 &&
-                           selectedIdx_ < static_cast<int>(objects_.size()) &&
-                           !objects_[selectedIdx_].isSelected) {
-                    selectedIdx_ = -1;
-                    for (size_t i = 0; i < objects_.size(); ++i) {
-                        if (objects_[i].isSelected) {
-                            selectedIdx_ = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                }
+                activeObjectIdx_ = targetIdx;
                 statusLine_ = std::string(nextSel ? "SELECTED " : "DESELECTED ") +
-                              primitiveName(objects_[hovIdx].type) + " #" +
-                              std::to_string(objects_[hovIdx].id) + " (" +
+                              primitiveName(objects_[targetIdx].type) + " #" +
+                              std::to_string(objects_[targetIdx].id) + " (" +
                               std::to_string(countSelectedObjects()) + " SELECTED)";
                 break;
             }
@@ -573,8 +627,10 @@ private:
                 for (size_t i = 0; i < objects_.size(); ++i) {
                     if (objects_[i].isSelected) {
                         objects_[i].groupId = gid;
-                        if (selectedIdx_ < 0 || !objects_[selectedIdx_].isSelected) {
-                            selectedIdx_ = static_cast<int>(i);
+                        if (activeObjectIdx_ < 0 ||
+                            activeObjectIdx_ >= static_cast<int>(objects_.size()) ||
+                            !objects_[activeObjectIdx_].isSelected) {
+                            activeObjectIdx_ = static_cast<int>(i);
                         }
                     }
                 }
@@ -604,13 +660,17 @@ private:
                             }
                         }
                     }
-                } else if (hovIdx >= 0 && hovIdx < static_cast<int>(objects_.size()) &&
-                           objects_[hovIdx].groupId >= 0) {
-                    const int hovGid = objects_[hovIdx].groupId;
-                    for (auto& o : objects_) {
-                        if (o.groupId == hovGid) {
-                            o.groupId = -1;
-                            ++ungrouped;
+                } else {
+                    const int targetIdx =
+                        (hovIdx >= 0) ? hovIdx : findClosestObjectToCursor(cursor3D_);
+                    if (targetIdx >= 0 && targetIdx < static_cast<int>(objects_.size()) &&
+                        objects_[targetIdx].groupId >= 0) {
+                        const int hovGid = objects_[targetIdx].groupId;
+                        for (auto& o : objects_) {
+                            if (o.groupId == hovGid) {
+                                o.groupId = -1;
+                                ++ungrouped;
+                            }
                         }
                     }
                 }
@@ -621,7 +681,6 @@ private:
             }
             case proto::GroupAction::ClearSelection: {
                 for (auto& o : objects_) o.isSelected = false;
-                selectedIdx_ = -1;
                 statusLine_ = "CLEARED SELECTION";
                 break;
             }
@@ -635,8 +694,23 @@ private:
         }
 
         for (auto& o : objects_) o.isHovered = false;
-        const int hovIdx = findHoveredObject(cursor3D_);
-        if (hovIdx >= 0) objects_[hovIdx].isHovered = true;
+        int hovIdx = -1;
+        if (leftMode_ == proto::LeftMode::Idle && hands_[1].isPresent()) {
+            hovIdx = findClosestObjectToCursor(cursor3D_);
+            if (hovIdx >= 0) {
+                activeObjectIdx_ = hovIdx;
+                for (int idx : collectGroupMembers(activeObjectIdx_)) {
+                    objects_[idx].isHovered = true;
+                }
+            }
+        } else if (leftMode_ == proto::LeftMode::Group && hands_[1].isPresent()) {
+            hovIdx = findClosestObjectToCursor(cursor3D_);
+            if (hovIdx >= 0) {
+                for (int idx : collectGroupMembers(hovIdx)) {
+                    objects_[idx].isHovered = true;
+                }
+            }
+        }
 
         const bool wasNotPinching = !wasPinching_;
         const bool risingEdge = isPinching_ && wasNotPinching;
@@ -657,10 +731,8 @@ private:
 
         // 1. Single-Shot Rising-Edge Spawn/Group OR Anchor Snapshot on Pinch Clutch
         if (spawnTrigger) {
-            for (auto& o : objects_) o.isSelected = false;
             SceneObject& created = spawnObject(activeShape_, cursor3D_, activeColor_);
-            created.isSelected = true;
-            selectedIdx_ = static_cast<int>(objects_.size()) - 1;
+            activeObjectIdx_ = static_cast<int>(objects_.size()) - 1;
             spawnTriggerFromPkt_ = false;
             char buf[160];
             std::snprintf(buf, sizeof(buf),
@@ -677,26 +749,16 @@ private:
             anchorHandPos_ = cursor3D_;
             anchorPalmSize_ = currentPalmSize_;
 
-            // Select hovered object (or its entire group) if pinching near one
-            if (hovIdx >= 0) {
-                const bool sameTargetGroup =
-                    (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size()) &&
-                     objects_[hovIdx].groupId >= 0 &&
-                     objects_[hovIdx].groupId == objects_[selectedIdx_].groupId);
-                if (hovIdx != selectedIdx_ && !sameTargetGroup) {
-                    deleteHoldTimer_ = 0.0f;
-                }
-                selectedIdx_ = hovIdx;
-                syncSelectionToIndex(selectedIdx_);
-            }
-            // Snapshot every object's `anchorTransform` at pinch engagement
+            // Target switching is strictly disabled outside IDLE/GROUP/SPAWN;
+            // snapshot every object's `anchorTransform` at pinch engagement.
             for (auto& o : objects_) {
                 o.anchorTransform = o.transform;
             }
         }
 
         // 2. While `isPinching_` is Held: Compute Axis-Locked Snapped Delta from Anchor
-        if (isPinching_ && selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size())) {
+        const std::vector<int> targets = collectTransformTargets();
+        if (isPinching_ && !targets.empty()) {
             const Vector3 rawDelta = Vector3Subtract(cursor3D_, anchorHandPos_);
             const float rawZDeltaCm = -(currentPalmSize_ - anchorPalmSize_) * kZSensitivityCm;
             float axisRawDelta = 0.0f;
@@ -704,7 +766,6 @@ private:
             else if (rightAxis_ == proto::RightAxis::Y) axisRawDelta = rawDelta.y;
             else if (rightAxis_ == proto::RightAxis::Z) axisRawDelta = rawZDeltaCm / kCmPerWorldUnit;
 
-            const std::vector<int> targets = collectTargetSet(selectedIdx_);
             char badge[128];
 
             switch (leftMode_) {
@@ -818,36 +879,46 @@ private:
 
         // 3b. Safe Timed Deletion (1.5s Thumbs-Down Hold + 1.0s Cooldown, group-aware)
         if (leftMode_ == proto::LeftMode::Delete) {
+            std::vector<int> deleteTargets = collectTransformTargets();
             if (deleteCooldownTimer_ > 0.0f) {
                 deleteHoldTimer_ = 0.0f;
-            } else if (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size())) {
+            } else if (!deleteTargets.empty()) {
                 deleteHoldTimer_ += dt;
                 if (deleteHoldTimer_ >= kDeleteHoldDurationSec) {
-                    std::vector<int> targets = collectTargetSet(selectedIdx_);
-                    std::sort(targets.begin(), targets.end());
-                    const int deletedGroupId = objects_[selectedIdx_].groupId;
-                    const uint32_t deletedId = objects_[selectedIdx_].id;
-                    const PrimitiveType deletedType = objects_[selectedIdx_].type;
-                    const size_t deletedCount = targets.size();
+                    const int refIdx = (activeObjectIdx_ >= 0 &&
+                                        activeObjectIdx_ < static_cast<int>(objects_.size()))
+                                           ? activeObjectIdx_
+                                           : deleteTargets[0];
+                    const int deletedGroupId = objects_[refIdx].groupId;
+                    const uint32_t deletedId = objects_[refIdx].id;
+                    const PrimitiveType deletedType = objects_[refIdx].type;
+                    const size_t deletedCount = deleteTargets.size();
 
-                    for (auto it = targets.rbegin(); it != targets.rend(); ++it) {
+                    for (auto it = deleteTargets.rbegin(); it != deleteTargets.rend(); ++it) {
                         objects_.erase(objects_.begin() + *it);
                     }
                     deleteHoldTimer_ = 0.0f;
                     deleteCooldownTimer_ = kDeleteCooldownDurationSec;
 
                     if (objects_.empty()) {
-                        selectedIdx_ = -1;
+                        activeObjectIdx_ = -1;
                     } else {
-                        selectedIdx_ = std::min(selectedIdx_, static_cast<int>(objects_.size()) - 1);
-                        syncSelectionToIndex(selectedIdx_);
+                        activeObjectIdx_ = std::min(
+                            std::max(activeObjectIdx_, 0),
+                            static_cast<int>(objects_.size()) - 1);
                     }
 
                     char delMsg[128];
-                    if (deletedCount > 1 && deletedGroupId >= 0) {
-                        std::snprintf(delMsg, sizeof(delMsg),
-                                      "DELETED GROUP #%d (%zu OBJECTS) // COOLDOWN 1.0s",
-                                      deletedGroupId, deletedCount);
+                    if (deletedCount > 1) {
+                        if (deletedGroupId >= 0) {
+                            std::snprintf(delMsg, sizeof(delMsg),
+                                          "DELETED GROUP #%d (%zu OBJECTS) // COOLDOWN 1.0s",
+                                          deletedGroupId, deletedCount);
+                        } else {
+                            std::snprintf(delMsg, sizeof(delMsg),
+                                          "DELETED %zu SELECTED OBJECTS // COOLDOWN 1.0s",
+                                          deletedCount);
+                        }
                     } else {
                         std::snprintf(delMsg, sizeof(delMsg), "DELETED [%s #%u] // COOLDOWN 1.0s",
                                       primitiveName(deletedType), deletedId);
@@ -866,16 +937,16 @@ private:
         if (leftMode_ == proto::LeftMode::Delete) {
             if (deleteCooldownTimer_ > 0.0f) {
                 std::snprintf(badge, sizeof(badge), "DELETE COOLDOWN (%.1fs)", deleteCooldownTimer_);
-            } else if (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size())) {
-                const size_t targetCount = collectTargetSet(selectedIdx_).size();
+            } else {
+                const size_t targetCount = collectTransformTargets().size();
                 if (targetCount > 1) {
                     std::snprintf(badge, sizeof(badge), "DELETING GROUP (%zu)... %.1fs",
                                   targetCount, deleteHoldTimer_);
-                } else {
+                } else if (targetCount == 1) {
                     std::snprintf(badge, sizeof(badge), "DELETING OBJECT... %.1fs", deleteHoldTimer_);
+                } else {
+                    std::snprintf(badge, sizeof(badge), "DELETE [NO OBJECT SELECTED]");
                 }
-            } else {
-                std::snprintf(badge, sizeof(badge), "DELETE [NO OBJECT SELECTED]");
             }
             measurementBadge_ = badge;
         } else if (leftMode_ == proto::LeftMode::Group) {
@@ -885,7 +956,21 @@ private:
             measurementBadge_ = badge;
         } else if (!isPinching_) {
             if (leftMode_ == proto::LeftMode::Idle) {
-                std::snprintf(badge, sizeof(badge), "IDLE [SAFE // LOCKED]  |  AXIS: %s", axStr);
+                if (activeObjectIdx_ >= 0 && activeObjectIdx_ < static_cast<int>(objects_.size())) {
+                    const SceneObject& sel = objects_[activeObjectIdx_];
+                    if (sel.groupId >= 0) {
+                        std::snprintf(badge, sizeof(badge),
+                                      "IDLE [AIM TO SELECT] | TARGET: GRP #%d | AXIS: %s",
+                                      sel.groupId, axStr);
+                    } else {
+                        std::snprintf(badge, sizeof(badge),
+                                      "IDLE [AIM TO SELECT] | TARGET: %s #%u | AXIS: %s",
+                                      primitiveName(sel.type), sel.id, axStr);
+                    }
+                } else {
+                    std::snprintf(badge, sizeof(badge), "IDLE [AIM TO SELECT] | NO TARGET | AXIS: %s",
+                                  axStr);
+                }
             } else if (leftMode_ == proto::LeftMode::Recolor) {
                 activeRecolorMask_ = 0;
                 recolorSessionMask_ = 0;
@@ -949,9 +1034,14 @@ private:
     }
 
     void draw3DScene(bool drawCursorSphere) {
+        const bool lockedMode = isTargetLockedMode(leftMode_);
+
         // 1. Render all permanent SceneObjects
         for (size_t i = 0; i < objects_.size(); ++i) {
             const SceneObject& obj = objects_[i];
+            const bool activeTarget = isObjectInActiveTarget(i);
+            const bool idleHoverTarget =
+                (leftMode_ == proto::LeftMode::Idle) && isObjectInActiveHover(i);
             Model& mdl = primitives_.model(obj.type);
             mdl.transform = obj.matrix();
 
@@ -960,30 +1050,58 @@ private:
             DrawModel(mdl, {0.f, 0.f, 0.f}, 1.0f, fillCol);
 
             Color wireCol = WHITE;
-            if (obj.isSelected) wireCol = Color{255, 235, 80, 255};
-            else if (obj.isHovered) wireCol = Color{100, 245, 255, 255};
-            else wireCol = Color{
-                static_cast<unsigned char>(std::min(255, obj.color.r + 50)),
-                static_cast<unsigned char>(std::min(255, obj.color.g + 50)),
-                static_cast<unsigned char>(std::min(255, obj.color.b + 50)),
-                255,
-            };
+            if (lockedMode && activeTarget) {
+                if (leftMode_ == proto::LeftMode::Delete) wireCol = Color{255, 75, 85, 255};
+                else if (leftMode_ == proto::LeftMode::Recolor) wireCol = activeColor_;
+                else wireCol = Color{255, 230, 70, 255};
+            } else if (obj.isHovered) {
+                wireCol = Color{120, 245, 255, 220};
+            } else if (obj.isSelected) {
+                wireCol = Color{255, 235, 80, 220};
+            } else {
+                wireCol = Color{
+                    static_cast<unsigned char>(std::min(255, obj.color.r + 50)),
+                    static_cast<unsigned char>(std::min(255, obj.color.g + 50)),
+                    static_cast<unsigned char>(std::min(255, obj.color.b + 50)),
+                    255,
+                };
+            }
             DrawModelWires(mdl, {0.f, 0.f, 0.f}, 1.0f, wireCol);
             mdl.transform = MatrixIdentity();
 
             if (obj.groupId >= 0) {
-                const BoundingBox bbox = computeWorldBoundingBox(obj);
-                DrawBoundingBox(bbox, obj.isSelected ? Color{60, 255, 165, 255}
-                                                     : Color{30, 215, 125, 225});
-            } else if (obj.isSelected) {
-                const BoundingBox bbox = computeWorldBoundingBox(obj);
-                DrawBoundingBox(bbox, Color{50, 235, 255, 255});
+                if (lockedMode && activeTarget) {
+                    const Color lockCol = (leftMode_ == proto::LeftMode::Delete)
+                                              ? Color{255, 70, 80, 255}
+                                              : Color{65, 255, 170, 255};
+                    DrawBoundingBox(computeWorldBoundingBox(obj, 0.07f), lockCol);
+                    DrawBoundingBox(computeWorldBoundingBox(obj, 0.11f), lockCol);
+                } else if (idleHoverTarget) {
+                    DrawBoundingBox(computeWorldBoundingBox(obj), Color{45, 225, 140, 155});
+                } else {
+                    DrawBoundingBox(computeWorldBoundingBox(obj),
+                                    obj.isSelected ? Color{60, 255, 165, 255}
+                                                   : Color{30, 215, 125, 210});
+                }
+            } else {
+                if (lockedMode && activeTarget) {
+                    const Color lockCol = (leftMode_ == proto::LeftMode::Delete)
+                                              ? Color{255, 70, 80, 255}
+                                              : (isPinching_ ? Color{255, 225, 65, 255}
+                                                             : Color{65, 245, 255, 255});
+                    DrawBoundingBox(computeWorldBoundingBox(obj, 0.07f), lockCol);
+                    DrawBoundingBox(computeWorldBoundingBox(obj, 0.11f), lockCol);
+                } else if (obj.isSelected) {
+                    DrawBoundingBox(computeWorldBoundingBox(obj), Color{50, 235, 255, 255});
+                } else if (idleHoverTarget) {
+                    DrawBoundingBox(computeWorldBoundingBox(obj), Color{90, 235, 255, 145});
+                }
             }
 
-            // Draw glowing 3D guide line through the currently selected or hovered object
-            // matching the active right_axis (Red=X, Green=Y, Blue=Z).
+            // Draw glowing 3D guide line through the active primary target object
             if (leftMode_ != proto::LeftMode::Group &&
-                (static_cast<int>(i) == selectedIdx_ || obj.isHovered)) {
+                leftMode_ != proto::LeftMode::Spawn &&
+                static_cast<int>(i) == activeObjectIdx_) {
                 drawGlowingAxisGuide(obj.transform.position, rightAxis_, isPinching_);
             }
         }
@@ -1163,20 +1281,20 @@ private:
 
     // --- Pill-Shaped Top-Center Measurement HUD & Telemetry Panels ----------
     void drawHudOverlays(const Camera3D& cam, int sw, int sh) const {
-        // 1. 3D Object Labels & Circular Deletion Progress Ring (group-aware)
-        const int selGroupId =
-            (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size()))
-                ? objects_[selectedIdx_].groupId
-                : -1;
+        // 1. 3D Object Labels, Hover Reticle (IDLE) & Solid Locked Highlight
+        const bool lockedMode = isTargetLockedMode(leftMode_);
         for (size_t i = 0; i < objects_.size(); ++i) {
             const auto& obj = objects_[i];
-            if (!obj.isSelected && !obj.isHovered && obj.groupId < 0) continue;
+            const bool isSelectedTarget = isObjectInActiveTarget(i);
+            const bool isIdleAim =
+                (leftMode_ == proto::LeftMode::Idle) && isObjectInActiveHover(i);
+            if (!isSelectedTarget && !isIdleAim && !obj.isSelected && !obj.isHovered &&
+                obj.groupId < 0) {
+                continue;
+            }
             const Vector2 sc = GetWorldToScreen(obj.transform.position, cam);
             if (sc.x < 0 || sc.x > sw || sc.y < 0 || sc.y > sh) continue;
 
-            const bool isSelectedTarget =
-                (static_cast<int>(i) == selectedIdx_) ||
-                (selGroupId >= 0 && obj.groupId == selGroupId);
             const bool isActiveDeleteTarget =
                 (leftMode_ == proto::LeftMode::Delete && isSelectedTarget &&
                  (deleteHoldTimer_ > 0.0f || deleteCooldownTimer_ > 0.0f));
@@ -1195,25 +1313,46 @@ private:
                     DrawRingLines(sc, 31.0f, 43.0f, -90.0f, -90.0f + 360.0f * delFrac, 48,
                                   Color{255, 185, 185, 230});
                 }
+            } else if (lockedMode && isSelectedTarget) {
+                const Color lockCol = (leftMode_ == proto::LeftMode::Delete)
+                    ? Color{255, 80, 90, 235}
+                    : (isPinching_ ? Color{255, 220, 65, 245}
+                                   : (obj.groupId >= 0 ? Color{60, 255, 165, 235}
+                                                       : Color{65, 245, 255, 235}));
+                drawLockedHighlight2D(sc, lockCol, isPinching_);
+            } else if (isIdleAim || (leftMode_ == proto::LeftMode::Group && obj.isHovered)) {
+                drawHoverReticle2D(sc, obj.groupId >= 0 ? Color{85, 245, 175, 180}
+                                                      : Color{110, 235, 255, 175});
             }
 
-            char tag[96];
+            const bool showLockedTag = lockedMode && isSelectedTarget;
+            char tag[112];
             if (obj.groupId >= 0) {
-                std::snprintf(tag, sizeof(tag), "%s #%u [GRP %d] (%.0fx%.0fx%.0f cm)",
+                std::snprintf(tag, sizeof(tag),
+                              showLockedTag ? "%s #%u [GRP %d // LOCKED] (%.0fx%.0fx%.0f cm)"
+                                            : "%s #%u [GRP %d] (%.0fx%.0fx%.0f cm)",
                               primitiveName(obj.type), obj.id, obj.groupId,
                               obj.transform.scale.x * kCmPerWorldUnit,
                               obj.transform.scale.y * kCmPerWorldUnit,
                               obj.transform.scale.z * kCmPerWorldUnit);
             } else {
-                std::snprintf(tag, sizeof(tag), "%s #%u (%.0fx%.0fx%.0f cm)",
+                std::snprintf(tag, sizeof(tag),
+                              showLockedTag ? "%s #%u [LOCKED] (%.0fx%.0fx%.0f cm)"
+                                            : "%s #%u (%.0fx%.0fx%.0f cm)",
                               primitiveName(obj.type), obj.id,
                               obj.transform.scale.x * kCmPerWorldUnit,
                               obj.transform.scale.y * kCmPerWorldUnit,
                               obj.transform.scale.z * kCmPerWorldUnit);
             }
-            const int labelY = static_cast<int>(sc.y) - (isActiveDeleteTarget ? 58 : 38);
+            int offsetPx = 38;
+            if (isActiveDeleteTarget) offsetPx = 58;
+            else if (showLockedTag) offsetPx = 54;
+            else if (isIdleAim) offsetPx = 46;
+            const int labelY = static_cast<int>(sc.y) - offsetPx;
             DrawText(tag, static_cast<int>(sc.x) - 65, labelY, 14,
-                     isActiveDeleteTarget ? RED : (obj.isSelected ? YELLOW : SKYBLUE));
+                     isActiveDeleteTarget ? RED
+                         : (showLockedTag ? Color{255, 230, 85, 255}
+                                          : (obj.isSelected ? YELLOW : SKYBLUE)));
         }
 
         // 2. Top-Center Pill-Shaped Measurement Badge (with RGB Swatch or Delete Progress Bar)
