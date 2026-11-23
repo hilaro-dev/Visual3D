@@ -4,7 +4,7 @@
 // from python_tracker/hand_tracker.py and cpp_engine/src/main.cpp.
 
 import * as THREE from "three";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm";
 
 // ---------------------------------------------------------------------------
 // 1. Constants & Enums (Exact match with hand_tracker.py & SceneObject.hpp)
@@ -107,9 +107,7 @@ const MASK_COLORS = {
   0b111: [1.00, 1.00, 1.00], // White   (255, 255, 255) -- Index + Middle + Ring
 };
 
-// Self-contained model asset paths (relative ./models/hand_landmarker.task inside /docs + official Google Storage HTTPS fallback)
-const LOCAL_HAND_LANDMARKER_URL = "./models/hand_landmarker.task";
-const REMOTE_HAND_LANDMARKER_URL =
+const HAND_LANDMARKER_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
 const VISION_WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm";
@@ -764,6 +762,7 @@ function assignHandSlots(rawHands, mirrored = true, swap = false) {
 // 5. Procedural Primitive Library & Wavefront .OBJ Parser / Exporter
 // ---------------------------------------------------------------------------
 function buildCapsuleBufferGeometry(radius = 0.45, cylHalfH = 0.65, slices = 20, rings = 8) {
+  // Exact port of PrimitiveLibrary::buildCapsuleMesh from SceneObject.hpp
   const prof = [];
   for (let i = 0; i <= rings; i++) {
     const t = i / rings;
@@ -875,14 +874,18 @@ class PrimitiveLibrary {
   }
 
   init() {
+    // 0: Cube (1.0 x 1.0 x 1.0)
     const cubeGeom = new THREE.BoxGeometry(1.0, 1.0, 1.0);
     cubeGeom.computeBoundingBox();
 
+    // 1: Capsule (radius=0.45, cylHalfH=0.65, slices=20, rings=8)
     const capsuleGeom = buildCapsuleBufferGeometry(0.45, 0.65, 20, 8);
 
+    // 2: Cylinder (radius=0.5, height=1.1, slices=24)
     const cylinderGeom = new THREE.CylinderGeometry(0.5, 0.5, 1.1, 24, 1);
     cylinderGeom.computeBoundingBox();
 
+    // 3: Ring / Torus (Raylib GenMeshTorus(0.32f, 0.95f, 20, 28) -> major=0.475, minor=0.16)
     const torusGeom = new THREE.TorusGeometry(0.475, 0.16, 20, 28);
     torusGeom.computeBoundingBox();
 
@@ -964,6 +967,7 @@ function parseAndNormalizeOBJ(objText, filename, targetExtent = 2.0) {
         faceVerts.push({ vIdx, nIdx });
       }
 
+      // Fan triangulation for polygons with >= 3 vertices
       for (let i = 1; i + 1 < faceVerts.length; i++) {
         const tri = [faceVerts[0], faceVerts[i], faceVerts[i + 1]];
         const baseIdx = outVertices.length;
@@ -988,6 +992,7 @@ function parseAndNormalizeOBJ(objText, filename, targetExtent = 2.0) {
     return null;
   }
 
+  // Raw bounding box
   const rawMin = outVertices[0].clone();
   const rawMax = outVertices[0].clone();
   for (let i = 1; i < outVertices.length; i++) {
@@ -995,6 +1000,7 @@ function parseAndNormalizeOBJ(objText, filename, targetExtent = 2.0) {
     rawMax.max(outVertices[i]);
   }
 
+  // ComputeNormalizationParams (exact match with SceneObject.hpp lines 162-189)
   const rawCenter = new THREE.Vector3(
     0.5 * (rawMin.x + rawMax.x),
     0.5 * (rawMin.y + rawMax.y),
@@ -1020,6 +1026,7 @@ function parseAndNormalizeOBJ(objText, filename, targetExtent = 2.0) {
     )
   );
 
+  // Transform vertices into normalized local space and synthesize missing flat normals
   for (let i = 0; i < outVertices.length; i++) {
     outVertices[i].add(pivotOffset).multiplyScalar(normScale);
   }
@@ -1107,7 +1114,7 @@ function serializeObjectsToOBJ(objects, primitives) {
   lines.push(`# Objects exported: ${objects.length}`);
   lines.push("");
 
-  let vertexOffset = 1;
+  let vertexOffset = 1; // Wavefront .obj indices are 1-based
   for (const obj of objects) {
     let base = null;
     if (obj.type === PrimitiveType.ImportedObj) {
@@ -1283,6 +1290,7 @@ function parseProjectFrom3dmproj(text, importedAssetCache) {
       continue;
     }
 
+    // Parse 16 whitespace-separated fields followed by quoted path
     const tokenRegex = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(.*)$/;
     const match = trimmed.match(tokenRegex);
     if (!match) return null;
@@ -1389,15 +1397,6 @@ class Visual3DWebApp {
     this.pipCtx = this.pipCanvas.getContext("2d");
     this.videoEl = document.getElementById("webcam-video");
 
-    // Camera Status / Error Overlay Elements
-    this.camOverlay = document.getElementById("camera-status-overlay");
-    this.camCard = document.getElementById("camera-status-card");
-    this.camOverlayBadge = document.getElementById("cam-overlay-badge");
-    this.camOverlayTitle = document.getElementById("cam-overlay-title");
-    this.camOverlayDetail = document.getElementById("cam-overlay-detail");
-    this.retryCameraBtn = document.getElementById("retry-camera-btn");
-    this.dismissCameraBtn = document.getElementById("dismiss-camera-btn");
-
     // Offscreen 640x480 mirrored capture canvas (feeds MediaPipe identically to cv2.flip(frame, 1))
     this.captureCanvas = document.createElement("canvas");
     this.captureCanvas.width = CAPTURE_WIDTH;
@@ -1431,21 +1430,17 @@ class Visual3DWebApp {
 
     // Vision & Mode+Clutch Engine
     this.handLandmarker = null;
-    this.mediaStream = null;
     this.visionReady = false;
     this.cameraReady = false;
-    this.isInitializingCamera = false;
     this.visionStatus = "LOADING MEDIAPIPE...";
-    this.cameraErrorText = "";
     this.lastVideoTime = -1;
-    this.lastDetectTs = -1;
     this.smoothers = [new LandmarkEMA(0.25, 0.25), new LandmarkEMA(0.25, 0.25)];
     this.engine = new ModeClutchEngine();
     this.hands = [
       { present: false, landmarks: null, features: null, score: 0 },
       { present: false, landmarks: null, features: null, score: 0 },
     ];
-    this.manualModeOverride = null;
+    this.manualModeOverride = null; // Dock click mode fallback when Left Hand is not in frame
 
     // Scene & State Machine Variables (exact match with ModeClutchApp in main.cpp)
     this.primitives = new PrimitiveLibrary();
@@ -1505,8 +1500,8 @@ class Visual3DWebApp {
     // Start render loop right away so 3D studio is interactive immediately
     requestAnimationFrame((ts) => this.loop(ts));
 
-    // Initialize Webcam + MediaPipe HandLandmarker
-    await this.initWebcamAndVision();
+    // Initialize Webcam + MediaPipe HandLandmarker asynchronously
+    this.initWebcamAndVision();
   }
 
   initThreeJS() {
@@ -1531,6 +1526,7 @@ class Visual3DWebApp {
     this.camera.up.set(0.0, 1.0, 0.0);
     this.camera.lookAt(0.0, 0.5, 0.0);
 
+    // Studio lighting to complement unlit/shaded CAD materials
     const ambient = new THREE.AmbientLight(0xffffff, 0.82);
     this.scene.add(ambient);
     const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.65);
@@ -1542,9 +1538,11 @@ class Visual3DWebApp {
 
     // Studio Grid & Origin Axis Lines (Mode B only)
     this.studioEnvGroup = new THREE.Group();
+    // DrawGrid(20, 0.5f) -> 20 slices * 0.5f spacing = 10.0 total size, 20 divisions
     const gridHelper = new THREE.GridHelper(10.0, 20, 0x556070, 0x363c48);
     this.studioEnvGroup.add(gridHelper);
 
+    // draw3DAxisOriginLines()
     const makeOriginLine = (p1, p2, hexColor) => {
       const g = new THREE.BufferGeometry().setFromPoints([p1, p2]);
       const m = new THREE.LineBasicMaterial({
@@ -1565,12 +1563,14 @@ class Visual3DWebApp {
     );
     this.scene.add(this.studioEnvGroup);
 
+    // Dynamic Scene Groups (re-populated or updated per frame)
     this.objectsGroup = new THREE.Group();
     this.scene.add(this.objectsGroup);
 
     this.overlays3DGroup = new THREE.Group();
     this.scene.add(this.overlays3DGroup);
 
+    // Pre-build 3D Cursor Sphere + Wireframe Sphere
     this.cursorGroup = new THREE.Group();
     const cursorInnerGeom = new THREE.SphereGeometry(1.0, 16, 16);
     this.cursorInnerMat = new THREE.MeshBasicMaterial({ color: 0xff4b55 });
@@ -1588,6 +1588,7 @@ class Visual3DWebApp {
     this.cursorGroup.add(this.cursorWireMesh);
     this.scene.add(this.cursorGroup);
 
+    // Pre-build Ghost Preview Group for SPAWN mode
     this.ghostGroup = new THREE.Group();
     this.ghostFillMat = new THREE.MeshLambertMaterial({
       color: 0x26e6ff,
@@ -1606,257 +1607,53 @@ class Visual3DWebApp {
     this.ghostGroup.visible = false;
     this.scene.add(this.ghostGroup);
 
+    // Pre-build Glowing Axis Guide Builders (X, Y, Z)
     this.axisGuidesGroup = new THREE.Group();
     this.scene.add(this.axisGuidesGroup);
   }
 
-  setCameraOverlayStatus({ visible, isError = false, badge = "", title = "", detail = "" }) {
-    if (!this.camOverlay) return;
-    if (!visible) {
-      this.camOverlay.classList.add("hidden");
-      return;
-    }
-    this.camOverlay.classList.remove("hidden");
-    this.camCard.classList.toggle("cam-error", isError);
-    if (badge) this.camOverlayBadge.textContent = badge;
-    if (title) this.camOverlayTitle.textContent = title;
-    if (detail) this.camOverlayDetail.textContent = detail;
-    if (this.dismissCameraBtn) {
-      this.dismissCameraBtn.classList.toggle("hidden", !isError);
-    }
-  }
-
-  describeCameraError(err) {
-    const name = (err && err.name) ? err.name : "CameraError";
-    const msg = (err && err.message) ? err.message : String(err);
-    let hint = "";
-    if (name === "NotReadableError" || name === "TrackStartError") {
-      hint = "Another application (e.g., desktop Python hand_tracker.py, Zoom, or another browser tab) is currently holding the webcam. Close it and click RETRY CAMERA.";
-    } else if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-      hint = "Camera permission was denied. Allow camera access in your browser's address bar site settings, then click RETRY CAMERA.";
-    } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-      hint = "No webcam device was detected on this machine. Connect a camera and click RETRY CAMERA.";
-    } else if (!window.isSecureContext) {
-      hint = "Browser getUserMedia requires a secure context (HTTPS on GitHub Pages or http://localhost).";
-    }
-    return {
-      name,
-      msg,
-      fullDetail: hint ? `${name}: ${msg} — ${hint}` : `${name}: ${msg}`,
-    };
-  }
-
-  async waitForVideoReady(video, timeoutMs = 8000) {
-    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-      return;
-    }
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          reject(new Error("Timed out waiting for webcam video frames (readyState < 2)."));
-        }
-      }, timeoutMs);
-
-      const checkReady = () => {
-        if (!settled && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-          settled = true;
-          cleanup();
-          resolve();
-        }
-      };
-
-      const onError = (e) => {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          reject(new Error(`Video element error: ${e?.message || "unable to decode stream"}`));
-        }
-      };
-
-      const cleanup = () => {
-        clearTimeout(timer);
-        video.removeEventListener("loadeddata", checkReady);
-        video.removeEventListener("canplay", checkReady);
-        video.removeEventListener("playing", checkReady);
-        video.removeEventListener("resize", checkReady);
-        video.removeEventListener("error", onError);
-      };
-
-      video.addEventListener("loadeddata", checkReady);
-      video.addEventListener("canplay", checkReady);
-      video.addEventListener("playing", checkReady);
-      video.addEventListener("resize", checkReady);
-      video.addEventListener("error", onError);
-      checkReady();
-    });
-  }
-
-  async createHandLandmarkerWithFallback(vision) {
-    const candidates = [
-      { modelAssetPath: LOCAL_HAND_LANDMARKER_URL, delegate: "GPU" },
-      { modelAssetPath: REMOTE_HAND_LANDMARKER_URL, delegate: "GPU" },
-      { modelAssetPath: LOCAL_HAND_LANDMARKER_URL, delegate: "CPU" },
-      { modelAssetPath: REMOTE_HAND_LANDMARKER_URL, delegate: "CPU" },
-    ];
-    let lastErr = null;
-    for (const cand of candidates) {
-      try {
-        return await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: cand.modelAssetPath,
-            delegate: cand.delegate,
-          },
-          runningMode: "VIDEO",
-          numHands: 2,
-          minHandDetectionConfidence: 0.70,
-          minHandPresenceConfidence: 0.50,
-          minTrackingConfidence: 0.60,
-        });
-      } catch (err) {
-        lastErr = err;
-        console.warn(
-          `[vision] HandLandmarker fallback (${cand.modelAssetPath}, ${cand.delegate}):`,
-          err
-        );
-      }
-    }
-    throw lastErr || new Error("Unable to initialize MediaPipe HandLandmarker.");
-  }
-
   async initWebcamAndVision() {
-    if (this.isInitializingCamera) return;
-    this.isInitializingCamera = true;
-    this.cameraReady = false;
-    this.cameraErrorText = "";
-
-    this.setCameraOverlayStatus({
-      visible: true,
-      isError: false,
-      badge: "CAMERA & VISION INIT",
-      title: "Requesting Webcam Access...",
-      detail: "Waiting for browser camera permission (640x480 user-facing stream)...",
-    });
-
-    // 1. Stop any previous stream tracks before requesting a fresh stream
-    if (this.mediaStream) {
-      for (const track of this.mediaStream.getTracks()) {
-        try {
-          track.stop();
-        } catch (_) {}
-      }
-      this.mediaStream = null;
-    }
-
-    // 2. Ensure <video> attributes & properties are set before getUserMedia
-    this.videoEl.autoplay = true;
-    this.videoEl.playsInline = true;
-    this.videoEl.muted = true;
-    this.videoEl.setAttribute("autoplay", "");
-    this.videoEl.setAttribute("playsinline", "");
-    this.videoEl.setAttribute("muted", "");
-
     try {
       this.visionStatus = "STARTING WEBCAM...";
-      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-        throw new Error(
-          "navigator.mediaDevices.getUserMedia is unavailable (requires HTTPS or localhost)."
-        );
-      }
-
-      let stream = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: "user" },
-          audio: false,
-        });
-      } catch (constraintErr) {
-        if (
-          constraintErr &&
-          (constraintErr.name === "OverconstrainedError" ||
-            constraintErr.name === "ConstraintNotSatisfiedError")
-        ) {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false,
-          });
-        } else {
-          throw constraintErr;
-        }
-      }
-
-      this.mediaStream = stream;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: CAPTURE_WIDTH },
+          height: { ideal: CAPTURE_HEIGHT },
+          frameRate: { ideal: 60 },
+          facingMode: "user",
+        },
+        audio: false,
+      });
       this.videoEl.srcObject = stream;
-
-      // Explicitly play() and wait until video.readyState >= 2 (video.videoWidth > 0)
       await this.videoEl.play();
-      await this.waitForVideoReady(this.videoEl);
-
       this.cameraReady = true;
-      this.lastVideoTime = -1;
-      this.visionStatus = this.visionReady ? "TRACKING ACTIVE" : "LOADING MODEL...";
     } catch (err) {
-      console.error("[vision] Webcam getUserMedia / play error:", err);
+      console.warn("[vision] Webcam access unavailable:", err);
       this.cameraReady = false;
-      const info = this.describeCameraError(err);
-      this.cameraErrorText = `${info.name}: ${info.msg}`;
-      this.visionStatus = `CAM ERR: ${info.name}`;
-      this.setCameraOverlayStatus({
-        visible: true,
-        isError: true,
-        badge: "WEBCAM INITIALIZATION ERROR",
-        title: `Camera Failed to Start (${info.name})`,
-        detail: info.fullDetail,
-      });
-      this.isInitializingCamera = false;
-      return;
+      this.visionStatus = "NO WEBCAM (CLICK CAM)";
     }
 
-    // 3. Initialize MediaPipe HandLandmarker (if not already loaded)
-    if (!this.visionReady || !this.handLandmarker) {
-      this.setCameraOverlayStatus({
-        visible: true,
-        isError: false,
-        badge: "MEDIAPIPE TASKS VISION",
-        title: "Loading HandLandmarker Model...",
-        detail: "Initializing MediaPipe Tasks Vision WASM (v0.10.18) and hand_landmarker.task...",
+    try {
+      this.visionStatus = "LOADING HAND MODEL...";
+      const vision = await FilesetResolver.forVisionTasks(VISION_WASM_URL);
+      this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: HAND_LANDMARKER_URL,
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO",
+        numHands: 2,
+        minHandDetectionConfidence: 0.70,
+        minHandPresenceConfidence: 0.50,
+        minTrackingConfidence: 0.60,
       });
-
-      try {
-        this.visionStatus = "LOADING HAND MODEL...";
-        const vision = await FilesetResolver.forVisionTasks(VISION_WASM_URL);
-        this.handLandmarker = await this.createHandLandmarkerWithFallback(vision);
-        this.visionReady = true;
-        this.visionStatus = "TRACKING ACTIVE";
-      } catch (err) {
-        console.error("[vision] MediaPipe HandLandmarker initialization error:", err);
-        this.visionReady = false;
-        const errName = (err && err.name) ? err.name : "MediaPipeError";
-        const errMsg = (err && err.message) ? err.message : String(err);
-        this.cameraErrorText = `${errName}: ${errMsg}`;
-        this.visionStatus = "MEDIAPIPE ERROR";
-        this.setCameraOverlayStatus({
-          visible: true,
-          isError: true,
-          badge: "MEDIAPIPE INITIALIZATION ERROR",
-          title: `Hand Tracker Failed to Load (${errName})`,
-          detail: `${errName}: ${errMsg} — Check your network connection and click RETRY CAMERA.`,
-        });
-        this.isInitializingCamera = false;
-        return;
-      }
+      this.visionReady = true;
+      this.visionStatus = this.cameraReady ? "TRACKING ACTIVE" : "NO WEBCAM";
+    } catch (err) {
+      console.error("[vision] MediaPipe HandLandmarker initialization error:", err);
+      this.visionReady = false;
+      this.visionStatus = "MEDIAPIPE ERROR";
     }
-
-    // Both webcam stream (readyState >= 2) and MediaPipe HandLandmarker are ready!
-    this.setCameraOverlayStatus({ visible: false });
-    this.showToast(
-      `WEBCAM ACTIVE (${this.videoEl.videoWidth}x${this.videoEl.videoHeight}) // MEDIAPIPE READY`,
-      false,
-      2.5
-    );
-    this.isInitializingCamera = false;
   }
 
   resetDefaultScene() {
@@ -2374,6 +2171,7 @@ class Visual3DWebApp {
               (rawZDeltaCm / CM_PER_WORLD_UNIT) * 45.0,
               SNAP_ROTATE_STEP_DEG
             );
+            // Matches Raylib MatrixMultiply(MatrixMultiply(RotX, RotY), RotZ) -> RotZ * RotY * RotX in column-vector math
             const rotX = new THREE.Matrix4().makeRotationX(snappedPitchDeg * DEG2RAD);
             const rotY = new THREE.Matrix4().makeRotationY(snappedYawDeg * DEG2RAD);
             const rotZ = new THREE.Matrix4().makeRotationZ(snappedRollDeg * DEG2RAD);
@@ -2553,12 +2351,7 @@ class Visual3DWebApp {
   // 9. Vision Frame Processing & 3D / 2D Rendering
   // -------------------------------------------------------------------------
   processVisionFrame(nowSec, nowMs) {
-    if (
-      !this.cameraReady ||
-      this.videoEl.readyState < 2 ||
-      this.videoEl.videoWidth <= 0 ||
-      this.videoEl.videoHeight <= 0
-    ) {
+    if (!this.cameraReady || this.videoEl.readyState < 2) {
       this.hands[0].present = false;
       this.hands[1].present = false;
       return;
@@ -2576,18 +2369,7 @@ class Visual3DWebApp {
     this.lastVideoTime = this.videoEl.currentTime;
     this.trackerFrameCounter++;
 
-    // Enforce strictly monotonically increasing timestamp for MediaPipe detectForVideo
-    const detectTs = Math.max(Math.floor(nowMs), this.lastDetectTs + 1);
-    this.lastDetectTs = detectTs;
-
-    let res = null;
-    try {
-      res = this.handLandmarker.detectForVideo(this.captureCanvas, detectTs);
-    } catch (err) {
-      console.warn("[vision] detectForVideo transient error:", err);
-      return;
-    }
-
+    const res = this.handLandmarker.detectForVideo(this.captureCanvas, Math.floor(nowMs));
     const rawHands = [];
     if (res && res.landmarks && res.handedness) {
       for (let i = 0; i < res.landmarks.length; i++) {
@@ -2612,6 +2394,7 @@ class Visual3DWebApp {
       }
     }
 
+    // If Left Hand is detected in frame, clear manual dock mode override
     if (smoothed[0]) {
       this.manualModeOverride = null;
     }
@@ -2636,6 +2419,7 @@ class Visual3DWebApp {
       score: slots[1] ? slots[1].score : 0,
     };
 
+    // Sync telemetry into app state (exact match with main.cpp lines 444-490)
     this.leftMode = this.engine.leftMode;
     if (this.engine.rightAxis !== this.lastTrackerRightAxis) {
       this.lastTrackerRightAxis = this.engine.rightAxis;
@@ -2698,6 +2482,7 @@ class Visual3DWebApp {
     const halfLen = 4.5;
     const len = halfLen * 2.0;
 
+    // 1. Outer translucent glow cylinder + 2. Inner neon core cylinder
     const outerRad = activePinch ? 0.070 : 0.055;
     const innerRad = activePinch ? 0.026 : 0.020;
 
@@ -2720,6 +2505,7 @@ class Visual3DWebApp {
     cylGroup.add(new THREE.Mesh(innerGeom, innerMat));
     this.axisGuidesGroup.add(cylGroup);
 
+    // 3. Center bright white core line + tick marks every 1.0 world unit (10 cm)
     const a = center.clone().addScaledVector(dir, -halfLen);
     const b = center.clone().addScaledVector(dir, halfLen);
     const centerLineGeom = new THREE.BufferGeometry().setFromPoints([a, b]);
@@ -2756,11 +2542,12 @@ class Visual3DWebApp {
     const isStudio = this.viewportMode === ViewportMode.Studio3D;
     this.studioEnvGroup.visible = isStudio;
     if (isStudio) {
-      this.renderer.setClearColor(0x181a20, 1.0);
+      this.renderer.setClearColor(0x181a20, 1.0); // Color{24, 26, 32, 255}
     } else {
-      this.renderer.setClearColor(0x000000, 0.0);
+      this.renderer.setClearColor(0x000000, 0.0); // Transparent over fullscreen AR canvas
     }
 
+    // Clear per-frame dynamic 3D overlays (bounding boxes, group links, axis guides)
     while (this.overlays3DGroup.children.length > 0) {
       const c = this.overlays3DGroup.children[0];
       if (c.geometry) c.geometry.dispose();
@@ -2774,6 +2561,7 @@ class Visual3DWebApp {
 
     const lockedMode = this.isTargetLockedMode(this.leftMode);
 
+    // 1. Update all permanent SceneObjects
     for (let i = 0; i < this.objects.length; i++) {
       const obj = this.objects[i];
       if (!obj.threeNode) this.createThreeNodeForObject(obj);
@@ -2806,6 +2594,7 @@ class Visual3DWebApp {
       obj.threeNode.wireMat.color.setHex(rgbToHexInt(wireCol));
       obj.threeNode.wireMat.opacity = (wireCol.a ?? 255) / 255;
 
+      // Selection & Group 3D Bounding Boxes (exact match with main.cpp lines 1422-1449)
       if (obj.groupId >= 0) {
         if (lockedMode && activeTarget) {
           const lockHex = this.leftMode === LeftMode.Delete ? 0xff4650 : 0x41ffaa;
@@ -2837,6 +2626,7 @@ class Visual3DWebApp {
         }
       }
 
+      // Glowing 3D axis guide line through the active primary target object
       if (
         this.leftMode !== LeftMode.Group &&
         this.leftMode !== LeftMode.Spawn &&
@@ -2854,6 +2644,7 @@ class Visual3DWebApp {
       }
     }
 
+    // 1b. Group Connecting Lines Between Centers (groupId != -1)
     const seenGroups = new Set();
     for (const obj of this.objects) {
       if (obj.groupId < 0 || seenGroups.has(obj.groupId)) continue;
@@ -2896,6 +2687,7 @@ class Visual3DWebApp {
       }
     }
 
+    // 2. Ghost Preview in SPAWN mode while isPinching == false
     if (this.leftMode === LeftMode.Spawn && !this.isPinching) {
       this.ghostGroup.visible = true;
       const ghostGeom = this.primitives.geometry(this.activeShape);
@@ -2911,6 +2703,7 @@ class Visual3DWebApp {
       this.ghostGroup.visible = false;
     }
 
+    // 3. 3D Cursor Sphere (Studio 3D mode)
     this.cursorGroup.visible = isStudio;
     if (isStudio) {
       this.cursorGroup.position.copy(this.cursor3D);
@@ -2938,15 +2731,6 @@ class Visual3DWebApp {
       ctx.lineTo(w, y + 0.5);
       ctx.stroke();
     }
-
-    ctx.save();
-    ctx.font = '700 12px "JetBrains Mono", "Cascadia Mono", Consolas, monospace';
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = this.cameraErrorText ? "rgb(255, 110, 120)" : "rgb(120, 235, 255)";
-    const statusText = this.cameraErrorText || this.visionStatus || "STARTING WEBCAM...";
-    ctx.fillText(statusText.slice(0, 38), w * 0.5, h * 0.5);
-    ctx.restore();
   }
 
   // Exact port of draw2DHandSkeletonOverlay from main.cpp lines 1553-1616
@@ -3066,16 +2850,11 @@ class Visual3DWebApp {
   renderWebcamPiPOrAR() {
     const sw = window.innerWidth;
     const sh = window.innerHeight;
-    const hasVideoFrame =
-      this.cameraReady &&
-      this.videoEl.readyState >= 2 &&
-      this.videoEl.videoWidth > 0 &&
-      this.videoEl.videoHeight > 0;
 
     if (this.viewportMode === ViewportMode.ArCamera) {
       this.arBgCanvas.style.display = "block";
       this.pipContainer.classList.add("hidden");
-      if (hasVideoFrame) {
+      if (this.cameraReady && this.videoEl.readyState >= 2) {
         this.arBgCtx.drawImage(this.captureCanvas, 0, 0, sw, sh);
       } else {
         this.drawFallbackGridToCanvas(this.arBgCtx, sw, sh);
@@ -3086,7 +2865,7 @@ class Visual3DWebApp {
       this.pipContainer.classList.remove("hidden");
       const pipW = 320;
       const pipH = 240;
-      if (hasVideoFrame) {
+      if (this.cameraReady && this.videoEl.readyState >= 2) {
         this.pipCtx.drawImage(this.captureCanvas, 0, 0, pipW, pipH);
       } else {
         this.drawFallbackGridToCanvas(this.pipCtx, pipW, pipH);
@@ -3095,10 +2874,11 @@ class Visual3DWebApp {
     }
   }
 
+  // Project 3D position to 2D screen coordinates (matches Raylib GetWorldToScreen)
   worldToScreen(pos3, sw, sh) {
     const v = new THREE.Vector3(pos3.x, pos3.y, pos3.z);
     v.project(this.camera);
-    if (v.z > 1.0) return null;
+    if (v.z > 1.0) return null; // Behind camera
     return {
       x: (v.x * 0.5 + 0.5) * sw,
       y: (-v.y * 0.5 + 0.5) * sh,
@@ -3201,6 +2981,7 @@ class Visual3DWebApp {
       if (hovered >= 0) primaryLabelIdx = hovered;
     }
 
+    // 1. Decluttered Context-Aware 3D Reticles & Floating Object Pills
     ctx.font = '700 13px "JetBrains Mono", "Cascadia Mono", Consolas, monospace';
     ctx.textBaseline = "middle";
 
@@ -3305,7 +3086,7 @@ class Visual3DWebApp {
           dimZ *= Math.max(0.01, nb.max.z - nb.min.z);
         }
         const labelText = this.displayLabel(obj);
-        const dimsStr = `${dimX.toFixed(0)}x${dimY.toFixed(0)}x${dimZ.toFixed(0)} cm`;
+        const dimsStr = `${ dimX.toFixed(0)}x${dimY.toFixed(0)}x${dimZ.toFixed(0)} cm`;
         let tag = "";
         if (obj.groupId >= 0) {
           tag = showLockedTag
@@ -3423,6 +3204,7 @@ class Visual3DWebApp {
 
       this.telScene.textContent = `SCENE    : ${this.objects.length} ${this.objects.length === 1 ? "OBJECT" : "OBJECTS"} (1 unit = 10 cm)`;
 
+      // Highlight active dock button
       for (const btn of this.dockButtons) {
         const m = parseInt(btn.dataset.mode, 10);
         btn.classList.toggle("active", m === this.leftMode);
@@ -3468,7 +3250,6 @@ class Visual3DWebApp {
       borderCol = "rgb(255, 215, 65)";
     }
     this.modeBanner.style.borderColor = borderCol;
-
     if (!this.cleanHud) {
       const telRight = this.telemetryCard.offsetLeft + this.telemetryCard.offsetWidth;
       const pillW = this.modeBanner.offsetWidth;
@@ -3703,18 +3484,6 @@ class Visual3DWebApp {
       this.initWebcamAndVision();
     });
 
-    if (this.retryCameraBtn) {
-      this.retryCameraBtn.addEventListener("click", () => {
-        this.initWebcamAndVision();
-      });
-    }
-
-    if (this.dismissCameraBtn) {
-      this.dismissCameraBtn.addEventListener("click", () => {
-        this.setCameraOverlayStatus({ visible: false });
-      });
-    }
-
     // File Picker Listeners
     this.fileInputObj.addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
@@ -3748,6 +3517,7 @@ class Visual3DWebApp {
       const files = e.dataTransfer && e.dataTransfer.files;
       if (!files || files.length === 0) return;
 
+      // First load any .obj files so they are cached if a .3dmproj is dropped alongside them
       const fileList = Array.from(files);
       const objFiles = fileList.filter((f) => f.name.toLowerCase().endsWith(".obj"));
       const projFiles = fileList.filter((f) => f.name.toLowerCase().endsWith(".3dmproj"));
@@ -3787,8 +3557,6 @@ class Visual3DWebApp {
   // 12. Main 60 FPS Loop
   // -------------------------------------------------------------------------
   loop(nowMs) {
-    requestAnimationFrame((ts) => this.loop(ts));
-
     const dt = Math.min(0.05, Math.max(0.0, (nowMs - this.lastFrameTime) / 1000.0));
     this.lastFrameTime = nowMs;
     const nowSec = nowMs / 1000.0;
@@ -3822,6 +3590,8 @@ class Visual3DWebApp {
 
     // 5. Render 2D Screen-Space HUD Overlays
     this.render2DHudOverlays();
+
+    requestAnimationFrame((ts) => this.loop(ts));
   }
 }
 

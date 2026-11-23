@@ -55,108 +55,6 @@ body {
   pointer-events: none;
 }
 
-/* Camera & MediaPipe Status / Error Overlay */
-.cam-overlay {
-  position: absolute;
-  top: 72px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 45;
-  pointer-events: auto;
-}
-
-.cam-card {
-  min-width: 390px;
-  max-width: 540px;
-  padding: 16px 22px;
-  border-radius: 12px;
-  background: rgba(12, 18, 26, 0.95);
-  border: 1.8px solid rgba(55, 195, 235, 0.85);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.cam-card.cam-error {
-  background: rgba(28, 12, 18, 0.96);
-  border-color: rgb(255, 75, 85);
-  box-shadow: 0 12px 32px rgba(255, 45, 65, 0.22);
-}
-
-.cam-badge {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.8px;
-  color: rgb(90, 245, 255);
-  text-transform: uppercase;
-}
-
-.cam-card.cam-error .cam-badge {
-  color: rgb(255, 105, 115);
-}
-
-.cam-title {
-  font-size: 16px;
-  font-weight: 800;
-  color: #ffffff;
-}
-
-.cam-detail {
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: rgb(195, 210, 225);
-  word-break: break-word;
-  user-select: text;
-}
-
-.cam-card.cam-error .cam-detail {
-  color: rgb(255, 205, 210);
-}
-
-.cam-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.cam-retry-btn {
-  background: rgba(28, 135, 185, 0.92);
-  border: 1.5px solid rgb(110, 240, 255);
-  color: #ffffff;
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 800;
-  padding: 6px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-  letter-spacing: 0.4px;
-  transition: all 0.12s ease;
-}
-
-.cam-retry-btn:hover {
-  background: rgba(45, 165, 220, 1.0);
-  box-shadow: 0 0 12px rgba(110, 240, 255, 0.4);
-}
-
-.cam-dismiss-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(175, 195, 215, 0.4);
-  color: rgb(195, 210, 225);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 6px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.cam-dismiss-btn:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #ffffff;
-}
-
 /* Drag and Drop Overlay */
 #drop-overlay {
   position: absolute;
@@ -650,32 +548,17 @@ body {
   color: #ffffff;
 }
 
-.pip-Stage {
-  position: relative;
-  width: 320px;
-  height: 240px;
-  overflow: hidden;
-  background: rgb(16, 24, 36);
-}
-
-/* Keep the live <video> in-viewport at 320x240 beneath pip-canvas so browsers never throttle decoding */
-#webcam-video {
-  position: absolute;
-  inset: 0;
-  width: 320px;
-  height: 240px;
-  object-fit: cover;
-  transform: scaleX(-1);
-  opacity: 0.01;
-  pointer-events: none;
-  z-index: 1;
-}
-
 #pip-canvas {
-  position: relative;
-  z-index: 2;
   width: 320px;
   height: 240px;
   display: block;
-  background: transparent;
+  background: rgb(16, 24, 36);
+}
+
+#webcam-video {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
