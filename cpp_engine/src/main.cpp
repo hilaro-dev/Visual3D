@@ -96,6 +96,15 @@ inline const char* axisFingerName(proto::RightAxis a) {
     }
 }
 
+inline const char* axisFingerShort(proto::RightAxis a) {
+    switch (a) {
+        case proto::RightAxis::X: return "Index";
+        case proto::RightAxis::Y: return "Middle";
+        case proto::RightAxis::Z: return "Ring";
+        default: return "Index";
+    }
+}
+
 inline const char* spawnFingerName(PrimitiveType t) {
     switch (t) {
         case PrimitiveType::Cube: return "Thumb+Index";
@@ -103,6 +112,16 @@ inline const char* spawnFingerName(PrimitiveType t) {
         case PrimitiveType::Cylinder: return "Thumb+Ring";
         case PrimitiveType::Torus: return "Thumb+Pinky";
         default: return "Thumb+Index";
+    }
+}
+
+inline const char* spawnFingerShort(PrimitiveType t) {
+    switch (t) {
+        case PrimitiveType::Cube: return "Index";
+        case PrimitiveType::Capsule: return "Middle";
+        case PrimitiveType::Cylinder: return "Ring";
+        case PrimitiveType::Torus: return "Pinky";
+        default: return "Index";
     }
 }
 
@@ -123,6 +142,16 @@ inline const char* groupActionFingerName(proto::GroupAction a) {
         case proto::GroupAction::Ungroup: return "Thumb+Ring";
         case proto::GroupAction::ClearSelection: return "Thumb+Pinky";
         default: return "Thumb+Index";
+    }
+}
+
+inline const char* groupActionFingerShort(proto::GroupAction a) {
+    switch (a) {
+        case proto::GroupAction::SelectToggle: return "Index";
+        case proto::GroupAction::Group: return "Middle";
+        case proto::GroupAction::Ungroup: return "Ring";
+        case proto::GroupAction::ClearSelection: return "Pinky";
+        default: return "Index";
     }
 }
 
@@ -243,7 +272,12 @@ public:
         }
         if (IsKeyPressed(KEY_U)) {
             for (auto& o : objects_) o.groupId = -1;
-            statusLine_ = "UNGROUPED ALL OBJECTS";
+            showToast("UNGROUPED ALL OBJECTS", false, 2.2f);
+        }
+        if (IsKeyPressed(KEY_H)) {
+            cleanHud_ = !cleanHud_;
+            showToast(cleanHud_ ? "CLEAN HUD: ON  [PRESS H TO RESTORE]"
+                                : "CLEAN HUD: OFF", false, 2.2f);
         }
         if (IsKeyPressed(KEY_SPACE)) {
             spawnObject(activeShape_, cursor3D_, activeColor_);
@@ -330,10 +364,11 @@ public:
             activeObjectIdx_ = -1;
             deleteHoldTimer_ = 0.0f;
             deleteCooldownTimer_ = 0.0f;
-            statusLine_ = "SCENE CLEARED";
+            showToast("SCENE CLEARED", false, 2.2f);
         }
         if (IsKeyPressed(KEY_R)) {
             resetDefaultScene();
+            showToast("SCENE RESET TO DEFAULTS", false, 2.2f);
         }
     }
 
@@ -349,16 +384,16 @@ public:
                 o.groupId = gid;
                 o.isSelected = true;
             }
-            statusLine_ = "GROUPED ALL " + std::to_string(objects_.size()) +
-                          " OBJECTS INTO GROUP #" + std::to_string(gid);
+            showToast("GROUP #" + std::to_string(gid) + " CREATED (" +
+                      std::to_string(objects_.size()) + " objects)", false, 2.5f);
             return;
         }
         const int gid = nextGroupId_++;
         for (auto& o : objects_) {
             if (o.isSelected) o.groupId = gid;
         }
-        statusLine_ = "ASSIGNED GROUP #" + std::to_string(gid) + " TO " +
-                      std::to_string(count) + " SELECTED OBJECTS";
+        showToast("ASSIGNED GROUP #" + std::to_string(gid) + " (" +
+                  std::to_string(count) + " objects)", false, 2.5f);
     }
 
     void update(float dt, UDPReceiver& udp) {
@@ -541,6 +576,7 @@ private:
 
     std::string measurementBadge_ = "IDLE [SAFE]";
     std::string statusLine_;
+    bool cleanHud_ = false;
     bool dialogOpen_ = false;
     bool skipFrameAfterDialog_ = false;
     std::string toastMessage_;
@@ -860,7 +896,7 @@ private:
             case proto::GroupAction::Group: {
                 const int selCount = countSelectedObjects();
                 if (selCount < 2) {
-                    statusLine_ = "GROUP NEEDS >= 2 SELECTED OBJECTS (INDEX PINCH TO SELECT)";
+                    showToast("GROUP NEEDS >= 2 SELECTED OBJECTS (INDEX PINCH)", true, 2.5f);
                     return;
                 }
                 const int gid = nextGroupId_++;
@@ -874,8 +910,8 @@ private:
                         }
                     }
                 }
-                statusLine_ = "GROUPED " + std::to_string(selCount) +
-                              " OBJECTS INTO GROUP #" + std::to_string(gid);
+                showToast("GROUPED " + std::to_string(selCount) +
+                          " OBJECTS -> GROUP #" + std::to_string(gid), false, 2.5f);
                 break;
             }
             case proto::GroupAction::Ungroup: {
@@ -914,14 +950,16 @@ private:
                         }
                     }
                 }
-                statusLine_ = (ungrouped > 0)
-                    ? ("UNGROUPED " + std::to_string(ungrouped) + " OBJECTS")
-                    : "NO GROUPED OBJECTS TO UNGROUP";
+                if (ungrouped > 0) {
+                    showToast("UNGROUPED " + std::to_string(ungrouped) + " OBJECTS", false, 2.5f);
+                } else {
+                    showToast("NO GROUPED OBJECTS TO UNGROUP", true, 2.2f);
+                }
                 break;
             }
             case proto::GroupAction::ClearSelection: {
                 for (auto& o : objects_) o.isSelected = false;
-                statusLine_ = "CLEARED SELECTION";
+                showToast("CLEARED SELECTION", false, 2.0f);
                 break;
             }
         }
@@ -1163,7 +1201,7 @@ private:
                         std::snprintf(delMsg, sizeof(delMsg), "DELETED [%s #%u] // COOLDOWN 1.0s",
                                       deletedLabel.c_str(), deletedId);
                     }
-                    statusLine_ = delMsg;
+                    showToast(delMsg, false, 2.5f);
                 }
             } else {
                 deleteHoldTimer_ = 0.0f;
@@ -1525,15 +1563,24 @@ private:
 
     // --- Pill-Shaped Top-Center Measurement HUD & Telemetry Panels ----------
     void drawHudOverlays(const Camera3D& cam, int sw, int sh) const {
-        // 1. 3D Object Labels, Hover Reticle (IDLE) & Solid Locked Highlight
+        // 1. Decluttered Context-Aware 3D Reticles & Floating Object Pills
         const bool lockedMode = isTargetLockedMode(leftMode_);
+        int primaryLabelIdx = activeObjectIdx_;
+        if (leftMode_ == proto::LeftMode::Group && hands_[1].isPresent()) {
+            const int hovered = findClosestObjectToCursor(cursor3D_);
+            if (hovered >= 0) primaryLabelIdx = hovered;
+        }
+
         for (size_t i = 0; i < objects_.size(); ++i) {
             const auto& obj = objects_[i];
             const bool isSelectedTarget = isObjectInActiveTarget(i);
             const bool isIdleAim =
                 (leftMode_ == proto::LeftMode::Idle) && isObjectInActiveHover(i);
-            if (!isSelectedTarget && !isIdleAim && !obj.isSelected && !obj.isHovered &&
-                obj.groupId < 0) {
+            const bool isPrimaryLabel = (static_cast<int>(i) == primaryLabelIdx);
+            const bool isGroupBadge = (leftMode_ == proto::LeftMode::Group && obj.groupId >= 0);
+
+            if (!isSelectedTarget && !isIdleAim && !isPrimaryLabel &&
+                !isGroupBadge && !obj.isSelected && !obj.isHovered) {
                 continue;
             }
             const Vector2 sc = GetWorldToScreen(obj.transform.position, cam);
@@ -1569,56 +1616,167 @@ private:
                                                       : Color{110, 235, 255, 175});
             }
 
-            const bool showLockedTag = lockedMode && isSelectedTarget;
-            float dimX = obj.transform.scale.x * kCmPerWorldUnit;
-            float dimY = obj.transform.scale.y * kCmPerWorldUnit;
-            float dimZ = obj.transform.scale.z * kCmPerWorldUnit;
-            if (obj.type == PrimitiveType::ImportedObj && obj.importedModel) {
-                const BoundingBox& nb = obj.importedModel->normalizedLocalBox;
-                dimX *= std::max(0.01f, nb.max.x - nb.min.x);
-                dimY *= std::max(0.01f, nb.max.y - nb.min.y);
-                dimZ *= std::max(0.01f, nb.max.z - nb.min.z);
+            if (isPrimaryLabel) {
+                const bool showLockedTag = lockedMode && isSelectedTarget;
+                float dimX = obj.transform.scale.x * kCmPerWorldUnit;
+                float dimY = obj.transform.scale.y * kCmPerWorldUnit;
+                float dimZ = obj.transform.scale.z * kCmPerWorldUnit;
+                if (obj.type == PrimitiveType::ImportedObj && obj.importedModel) {
+                    const BoundingBox& nb = obj.importedModel->normalizedLocalBox;
+                    dimX *= std::max(0.01f, nb.max.x - nb.min.x);
+                    dimY *= std::max(0.01f, nb.max.y - nb.min.y);
+                    dimZ *= std::max(0.01f, nb.max.z - nb.min.z);
+                }
+                const std::string labelText = obj.displayLabel();
+                char tag[128];
+                if (obj.groupId >= 0) {
+                    std::snprintf(tag, sizeof(tag),
+                                  showLockedTag ? "%s #%u [GRP %d // LOCKED]  %.0fx%.0fx%.0f cm"
+                                                : "%s #%u [GRP %d]  %.0fx%.0fx%.0f cm",
+                                  labelText.c_str(), obj.id, obj.groupId, dimX, dimY, dimZ);
+                } else {
+                    std::snprintf(tag, sizeof(tag),
+                                  showLockedTag ? "%s #%u [LOCKED]  %.0fx%.0fx%.0f cm"
+                                                : "%s #%u  %.0fx%.0fx%.0f cm",
+                                  labelText.c_str(), obj.id, dimX, dimY, dimZ);
+                }
+                const Color textCol = isActiveDeleteTarget ? Color{255, 110, 120, 255}
+                    : (showLockedTag ? Color{255, 230, 95, 255}
+                                     : (obj.groupId >= 0 ? Color{100, 250, 180, 255}
+                                                         : Color{140, 235, 255, 255}));
+                const int tagFont = 13;
+                const int tagW = MeasureText(tag, tagFont);
+                const int lPillW = tagW + 16;
+                const int lPillH = 22;
+                const int bottomGap = isActiveDeleteTarget ? 48
+                    : ((showLockedTag || isIdleAim) ? 44 : 30);
+                const int lx = std::clamp(static_cast<int>(sc.x) - lPillW / 2,
+                                          8, std::max(8, sw - lPillW - 8));
+                const int ly = std::max(8, static_cast<int>(sc.y) - bottomGap - lPillH);
+                const Rectangle lRect{static_cast<float>(lx), static_cast<float>(ly),
+                                      static_cast<float>(lPillW), static_cast<float>(lPillH)};
+                DrawRectangleRounded(lRect, 0.45f, 8, Color{12, 16, 22, 215});
+                DrawRectangleRoundedLinesEx(lRect, 0.45f, 8, 1.2f, Fade(textCol, 0.65f));
+                DrawText(tag, lx + 8, ly + (lPillH - tagFont) / 2, tagFont, textCol);
+            } else if (isGroupBadge) {
+                char grpTag[24];
+                std::snprintf(grpTag, sizeof(grpTag), "[GRP %d]", obj.groupId);
+                const int gFont = 12;
+                const int gW = MeasureText(grpTag, gFont);
+                const int gPillW = gW + 12;
+                const int gPillH = 18;
+                const int gx = std::clamp(static_cast<int>(sc.x) - gPillW / 2,
+                                          8, std::max(8, sw - gPillW - 8));
+                const int gy = std::max(8, static_cast<int>(sc.y) - 26 - gPillH);
+                const Rectangle gRect{static_cast<float>(gx), static_cast<float>(gy),
+                                      static_cast<float>(gPillW), static_cast<float>(gPillH)};
+                DrawRectangleRounded(gRect, 0.45f, 8, Color{12, 22, 18, 200});
+                DrawRectangleRoundedLinesEx(gRect, 0.45f, 8, 1.0f, Color{55, 225, 145, 175});
+                DrawText(grpTag, gx + 6, gy + (gPillH - gFont) / 2, gFont, Color{95, 250, 175, 255});
             }
-            const std::string labelText = obj.displayLabel();
-            char tag[128];
-            if (obj.groupId >= 0) {
-                std::snprintf(tag, sizeof(tag),
-                              showLockedTag ? "%s #%u [GRP %d // LOCKED] (%.0fx%.0fx%.0f cm)"
-                                            : "%s #%u [GRP %d] (%.0fx%.0fx%.0f cm)",
-                              labelText.c_str(), obj.id, obj.groupId, dimX, dimY, dimZ);
-            } else {
-                std::snprintf(tag, sizeof(tag),
-                              showLockedTag ? "%s #%u [LOCKED] (%.0fx%.0fx%.0f cm)"
-                                            : "%s #%u (%.0fx%.0fx%.0f cm)",
-                              labelText.c_str(), obj.id, dimX, dimY, dimZ);
-            }
-            int offsetPx = 38;
-            if (isActiveDeleteTarget) offsetPx = 58;
-            else if (showLockedTag) offsetPx = 54;
-            else if (isIdleAim) offsetPx = 46;
-            const int labelY = static_cast<int>(sc.y) - offsetPx;
-            DrawText(tag, static_cast<int>(sc.x) - 65, labelY, 14,
-                     isActiveDeleteTarget ? RED
-                         : (showLockedTag ? Color{255, 230, 85, 255}
-                                          : (obj.isSelected ? YELLOW : SKYBLUE)));
         }
 
-        // 2. Top-Center Pill-Shaped Measurement Badge (with RGB Swatch or Delete Progress Bar)
-        const int fontSize = 20;
+        // 2. Dynamic Auto-Sizing Top-Left Telemetry Card (hidden in Clean HUD mode)
+        int telemetryRightX = 0;
+        if (!cleanHud_) {
+            struct TelemetryRow {
+                std::string text;
+                Color color;
+            };
+            std::vector<TelemetryRow> rows;
+            rows.reserve(6);
+            char buf[96];
+
+            std::snprintf(buf, sizeof(buf), "VIEWPORT : %s [TAB]",
+                          viewportMode_ == ViewportMode::Studio3D ? "STUDIO 3D" : "AR OVERLAY");
+            rows.push_back({buf, RAYWHITE});
+
+            std::snprintf(buf, sizeof(buf), "L-MODE   : %s", modeName(leftMode_));
+            rows.push_back({buf, Color{90, 245, 255, 255}});
+
+            if (leftMode_ == proto::LeftMode::Spawn) {
+                std::snprintf(buf, sizeof(buf), "R-PICK   : %s (%s)",
+                              primitiveName(activeShape_), spawnFingerShort(activeShape_));
+                rows.push_back({buf, Color{90, 245, 255, 255}});
+            } else if (leftMode_ == proto::LeftMode::Group) {
+                std::snprintf(buf, sizeof(buf), "R-ACTION : %s (%s)",
+                              groupActionName(activeGroupAction_),
+                              groupActionFingerShort(activeGroupAction_));
+                rows.push_back({buf, Color{60, 245, 165, 255}});
+            } else {
+                std::snprintf(buf, sizeof(buf), "R-AXIS   : %s (%s)",
+                              axisName(rightAxis_), axisFingerShort(rightAxis_));
+                rows.push_back({buf, axisColor(rightAxis_)});
+            }
+
+            if (!hands_[1].isPresent() || pinchPx_ >= 900.0f) {
+                rows.push_back({"CLUTCH   : NO HAND", LIGHTGRAY});
+            } else {
+                std::snprintf(buf, sizeof(buf), "CLUTCH   : %s (%.0f px)",
+                              isPinching_ ? "PINCH" : "HOVER", pinchPx_);
+                rows.push_back({buf, isPinching_ ? YELLOW : LIGHTGRAY});
+            }
+
+            std::snprintf(buf, sizeof(buf), "ENGINE   : %d FPS | %.0f PKT/S",
+                          GetFPS(), linkStats_.packetsPerSec);
+            rows.push_back({buf, linkStats_.connected ? GREEN : ORANGE});
+
+            std::snprintf(buf, sizeof(buf), "SCENE    : %zu %s (1 unit = 10 cm)",
+                          objects_.size(), objects_.size() == 1 ? "OBJECT" : "OBJECTS");
+            rows.push_back({buf, SKYBLUE});
+
+            const char* cardTitle = "VISUAL3D STUDIO";
+            const int titleFont = 14;
+            const int bodyFont = 13;
+            const int pad = 14;
+            const int rowStep = 19;
+
+            int maxLineW = MeasureText(cardTitle, titleFont);
+            for (const auto& r : rows) {
+                maxLineW = std::max(maxLineW, MeasureText(r.text.c_str(), bodyFont));
+            }
+            const int boxX = 18;
+            const int boxY = 18;
+            const int boxW = maxLineW + pad * 2;
+            const int boxH = pad + 26 + static_cast<int>(rows.size() - 1) * rowStep + bodyFont + pad;
+            telemetryRightX = boxX + boxW;
+
+            const Rectangle cardRect{
+                static_cast<float>(boxX), static_cast<float>(boxY),
+                static_cast<float>(boxW), static_cast<float>(boxH)
+            };
+            DrawRectangleRounded(cardRect, 0.14f, 10, Color{14, 18, 24, 215});
+            DrawRectangleRoundedLinesEx(cardRect, 0.14f, 10, 1.5f, Color{55, 195, 235, 165});
+            DrawText(cardTitle, boxX + pad, boxY + pad, titleFont, Color{110, 235, 255, 255});
+            DrawLine(boxX + pad, boxY + pad + 19, boxX + boxW - pad, boxY + pad + 19,
+                     Color{55, 195, 235, 70});
+            for (size_t r = 0; r < rows.size(); ++r) {
+                DrawText(rows[r].text.c_str(), boxX + pad,
+                         boxY + pad + 26 + static_cast<int>(r) * rowStep,
+                         bodyFont, rows[r].color);
+            }
+        }
+
+        // 3. Auto-Sizing Top-Center Mode Banner (always visible)
+        const int fontSize = 18;
         const bool showSwatch = (leftMode_ == proto::LeftMode::Recolor);
         const bool showDeleteBar = (leftMode_ == proto::LeftMode::Delete &&
                                     deleteCooldownTimer_ <= 0.0f &&
                                     deleteHoldTimer_ > 0.0f);
         const bool showDeleteCooldown = (leftMode_ == proto::LeftMode::Delete &&
                                          deleteCooldownTimer_ > 0.0f);
-        const int swatchSpace = showSwatch ? 36 : 0;
+        const int swatchSpace = showSwatch ? 32 : 0;
         const int textW = MeasureText(measurementBadge_.c_str(), fontSize);
-        const int pillW = std::max(380, textW + 48 + swatchSpace);
-        const int pillH = showDeleteBar ? 54 : 44;
-        const int pillX = (sw - pillW) / 2;
+        const int pillW = textW + 36 + swatchSpace;
+        const int pillH = showDeleteBar ? 48 : 38;
+        const int pillY = 16;
+        int pillX = (sw - pillW) / 2;
+        if (!cleanHud_ && pillX < telemetryRightX + 12) {
+            pillX = std::max(16, std::min(sw - pillW - 16, telemetryRightX + 12));
+        }
         const Rectangle pillRect{
             static_cast<float>(pillX),
-            16.0f,
+            static_cast<float>(pillY),
             static_cast<float>(pillW),
             static_cast<float>(pillH),
         };
@@ -1628,113 +1786,111 @@ private:
             : (leftMode_ == proto::LeftMode::Group
                    ? (isPinching_ ? Color{255, 215, 65, 255} : Color{50, 235, 155, 255})
                    : (isPinching_ ? Color{255, 215, 65, 255} : axisColor(rightAxis_)))));
-        DrawRectangleRounded(pillRect, 0.5f, 16, Color{14, 22, 34, 235});
-        DrawRectangleRoundedLinesEx(pillRect, 0.5f, 16, 2.5f, borderCol);
+        DrawRectangleRounded(pillRect, 0.5f, 16, Color{14, 18, 24, 225});
+        DrawRectangleRoundedLinesEx(pillRect, 0.5f, 16, 2.2f, borderCol);
         if (showSwatch) {
-            const int textStartX = pillX + 24;
-            DrawText(measurementBadge_.c_str(), textStartX, 28, fontSize, WHITE);
-            const Rectangle swatch{static_cast<float>(textStartX + textW + 14), 24.0f, 26.0f, 26.0f};
-            DrawRectangleRounded(swatch, 0.25f, 6, activeColor_);
-            DrawRectangleRoundedLinesEx(swatch, 0.25f, 6, 1.5f, WHITE);
+            const int textStartX = pillX + 18;
+            const int textY = pillY + (pillH - fontSize) / 2;
+            DrawText(measurementBadge_.c_str(), textStartX, textY, fontSize, WHITE);
+            const Rectangle swatch{
+                static_cast<float>(textStartX + textW + 10),
+                static_cast<float>(pillY + (pillH - 22) / 2),
+                22.0f, 22.0f
+            };
+            DrawRectangleRounded(swatch, 0.28f, 6, activeColor_);
+            DrawRectangleRoundedLinesEx(swatch, 0.28f, 6, 1.5f, WHITE);
         } else if (showDeleteBar) {
-            DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 22, fontSize, Color{255, 115, 125, 255});
+            DrawText(measurementBadge_.c_str(), pillX + (pillW - textW) / 2, pillY + 6,
+                     fontSize, Color{255, 115, 125, 255});
             const float delFrac = std::clamp(deleteHoldTimer_ / kDeleteHoldDurationSec, 0.0f, 1.0f);
-            const float trackW = static_cast<float>(pillW - 44);
-            const Rectangle track{static_cast<float>(pillX + 22), 54.0f, trackW, 6.0f};
+            const float trackW = static_cast<float>(pillW - 36);
+            const Rectangle track{
+                static_cast<float>(pillX + 18), static_cast<float>(pillY + pillH - 11),
+                trackW, 5.0f
+            };
             const Rectangle fill{track.x, track.y, trackW * delFrac, track.height};
             DrawRectangleRounded(track, 0.5f, 6, Color{60, 18, 22, 230});
             DrawRectangleRounded(fill, 0.5f, 6, Color{255, 55, 68, 255});
         } else {
-            DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 28, fontSize, WHITE);
+            DrawText(measurementBadge_.c_str(), pillX + (pillW - textW) / 2,
+                     pillY + (pillH - fontSize) / 2, fontSize, WHITE);
         }
 
-        // 2b. Import / Export Confirmation Toast Banner
+        // 3b. Import / Export / Project Confirmation Toast Banner
         if (toastTimer_ > 0.0f && !toastMessage_.empty()) {
             const float alpha = std::clamp(toastTimer_ / 0.6f, 0.0f, 1.0f);
             const unsigned char aBg = static_cast<unsigned char>(230.0f * alpha);
             const unsigned char aFg = static_cast<unsigned char>(255.0f * alpha);
-            const int tFont = 17;
+            const int tFont = 16;
             const int tW = MeasureText(toastMessage_.c_str(), tFont);
-            const int bW = std::max(320, tW + 40);
+            const int bW = std::max(280, tW + 36);
             const int bX = (sw - bW) / 2;
-            const int bY = showDeleteBar ? 78 : 70;
+            const int bY = pillY + pillH + 10;
             const Rectangle toastRect{
-                static_cast<float>(bX), static_cast<float>(bY), static_cast<float>(bW), 34.0f
+                static_cast<float>(bX), static_cast<float>(bY), static_cast<float>(bW), 32.0f
             };
             const Color fillC = toastIsError_ ? Color{65, 16, 22, aBg} : Color{14, 52, 34, aBg};
             const Color lineC = toastIsError_ ? Color{255, 75, 85, aFg} : Color{60, 245, 145, aFg};
             const Color textC = toastIsError_ ? Color{255, 200, 205, aFg} : Color{210, 255, 230, aFg};
             DrawRectangleRounded(toastRect, 0.5f, 12, fillC);
-            DrawRectangleRoundedLinesEx(toastRect, 0.5f, 12, 2.0f, lineC);
-            DrawText(toastMessage_.c_str(), (sw - tW) / 2, bY + 9, tFont, textC);
+            DrawRectangleRoundedLinesEx(toastRect, 0.5f, 12, 1.8f, lineC);
+            DrawText(toastMessage_.c_str(), bX + (bW - tW) / 2, bY + 8, tFont, textC);
         }
 
-        // 3. Top-Left Mode + Clutch Telemetry Card
-        DrawRectangle(18, 18, 330, 152, Color{14, 20, 30, 220});
-        DrawRectangleLines(18, 18, 330, 152, Color{55, 195, 235, 200});
-        DrawText("VISUAL3D // MODE + CLUTCH ENGINE", 28, 26, 15, Color{110, 235, 255, 255});
+        // 4. Consolidated Low-Contrast Shortcut Strip + Bottom Mode Dock (hidden in Clean HUD)
+        if (!cleanHud_) {
+            const int dockY = sh - 50;
+            const int btnW = 98;
+            const int btnH = 32;
+            const int gap = 8;
 
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "VIEWPORT : %s [TAB]",
-                      viewportMode_ == ViewportMode::Studio3D ? "MODE B: STUDIO 3D + PiP"
-                                                              : "MODE A: AR CAMERA FULL");
-        DrawText(buf, 28, 48, 14, RAYWHITE);
+            const char* shortcutLegend =
+                "[TAB] View  |  [P] Save  |  [O] Open  |  [I] Import .OBJ  |  [E] Export Group  |  [S] Export Scene  |  [H] Clean HUD";
+            const int legFont = 12;
+            const int legW = MeasureText(shortcutLegend, legFont) + 20;
+            const int legH = 22;
+            const int legY = dockY - 30;
+            const Rectangle legRect{
+                18.0f, static_cast<float>(legY), static_cast<float>(legW), static_cast<float>(legH)
+            };
+            DrawRectangleRounded(legRect, 0.30f, 8, Color{14, 18, 24, 185});
+            DrawRectangleRoundedLinesEx(legRect, 0.30f, 8, 1.0f, Color{55, 80, 105, 120});
+            DrawText(shortcutLegend, 28, legY + (legH - legFont) / 2, legFont,
+                     Color{165, 185, 205, 215});
 
-        std::snprintf(buf, sizeof(buf), "L-MODE   : %s (150ms Debounced)", modeName(leftMode_));
-        DrawText(buf, 28, 68, 14, Color{90, 245, 255, 255});
-
-        if (leftMode_ == proto::LeftMode::Spawn) {
-            std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)", primitiveName(activeShape_),
-                          spawnFingerName(activeShape_));
-            DrawText(buf, 28, 88, 14, Color{90, 245, 255, 255});
-        } else if (leftMode_ == proto::LeftMode::Group) {
-            std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)",
-                          groupActionName(activeGroupAction_),
-                          groupActionFingerName(activeGroupAction_));
-            DrawText(buf, 28, 88, 14, Color{60, 245, 165, 255});
-        } else {
-            std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)", axisName(rightAxis_),
-                          axisFingerName(rightAxis_));
-            DrawText(buf, 28, 88, 14, axisColor(rightAxis_));
+            const char* modeLabels[8] = {
+                "0 IDLE", "1 MOVE", "2 RESIZE", "3 ROTATE",
+                "4 COLOR", "5 GROUP", "TU SPAWN", "TD DEL"
+            };
+            const int labelFont = 13;
+            for (int m = 0; m < 8; ++m) {
+                const int bx = 18 + m * (btnW + gap);
+                const bool active = (static_cast<int>(leftMode_) == m);
+                const Color activeFill = (m == 7) ? Color{175, 35, 48, 235}
+                    : (m == 5 ? Color{25, 130, 90, 235} : Color{28, 125, 175, 235});
+                const Color activeLine = (m == 7) ? Color{255, 95, 105, 255}
+                    : (m == 5 ? Color{70, 245, 165, 255} : Color{110, 240, 255, 255});
+                const Rectangle btnRect{
+                    static_cast<float>(bx), static_cast<float>(dockY),
+                    static_cast<float>(btnW), static_cast<float>(btnH)
+                };
+                if (active) {
+                    const Rectangle glowRect{
+                        static_cast<float>(bx - 2), static_cast<float>(dockY - 2),
+                        static_cast<float>(btnW + 4), static_cast<float>(btnH + 4)
+                    };
+                    DrawRectangleRoundedLinesEx(glowRect, 0.32f, 8, 2.0f, Fade(activeLine, 0.35f));
+                }
+                DrawRectangleRounded(btnRect, 0.30f, 8,
+                                     active ? activeFill : Color{14, 18, 24, 200});
+                DrawRectangleRoundedLinesEx(btnRect, 0.30f, 8, active ? 1.8f : 1.0f,
+                                            active ? activeLine : Color{50, 75, 100, 150});
+                const int lblW = MeasureText(modeLabels[m], labelFont);
+                DrawText(modeLabels[m], bx + (btnW - lblW) / 2,
+                         dockY + (btnH - labelFont) / 2, labelFont,
+                         active ? WHITE : Color{170, 185, 205, 220});
+            }
         }
-
-        std::snprintf(buf, sizeof(buf), "CLUTCH   : %s (%.1f px | <32 / >46)",
-                      isPinching_ ? "ENGAGED [PINCH]" : "RELEASED [HOVER]", pinchPx_);
-        DrawText(buf, 28, 108, 14, isPinching_ ? YELLOW : LIGHTGRAY);
-
-        std::snprintf(buf, sizeof(buf), "FPS / UDP: %d FPS | %.1f PKT/S (%s)",
-                      GetFPS(), linkStats_.packetsPerSec,
-                      linkStats_.connected ? "ONLINE" : "WAITING");
-        DrawText(buf, 28, 128, 14, linkStats_.connected ? GREEN : ORANGE);
-
-        std::snprintf(buf, sizeof(buf), "OBJECTS  : %zu (1.0 unit = 10.0 cm)", objects_.size());
-        DrawText(buf, 28, 148, 14, SKYBLUE);
-
-        // 4. Compact Shortcut Legend + Bottom-Left Left-Hand Mode Bar (0..7)
-        const char* shortcutLegend =
-            "[P] Save Project (.3dmproj)  |  [O] Open Project  |  [I] Import .OBJ  |  [E] Export Group .OBJ";
-        const int legFont = 13;
-        const int legW = MeasureText(shortcutLegend, legFont) + 20;
-        const int legY = sh - 98;
-        DrawRectangle(18, legY, legW, 24, Color{14, 20, 30, 215});
-        DrawRectangleLines(18, legY, legW, 24, Color{55, 195, 235, 180});
-        DrawText(shortcutLegend, 28, legY + 5, legFont, Color{190, 240, 255, 245});
-
-        const char* modeLabels[8] = {
-            "0:IDLE", "1:MOVE", "2:RESIZE", "3:ROTATE",
-            "4:COLOR", "5:GROUP", "TU:SPAWN", "TD:DEL"
-        };
-        const int barY = sh - 68;
-        for (int m = 0; m < 8; ++m) {
-            const int bx = 18 + m * 116;
-            const bool active = (static_cast<int>(leftMode_) == m);
-            const Color activeFill = (m == 7) ? Color{175, 35, 48, 235} : Color{35, 135, 185, 235};
-            const Color activeLine = (m == 7) ? Color{255, 95, 105, 255} : Color{120, 245, 255, 255};
-            DrawRectangle(bx, barY, 110, 32, active ? activeFill : Color{16, 24, 36, 200});
-            DrawRectangleLines(bx, barY, 110, 32, active ? activeLine : Color{50, 95, 125, 180});
-            DrawText(modeLabels[m], bx + 8, barY + 9, 13, active ? WHITE : LIGHTGRAY);
-        }
-        DrawText(statusLine_.c_str(), 20, sh - 26, 14, Color{150, 220, 245, 230});
     }
 };
 
