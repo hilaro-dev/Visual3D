@@ -176,6 +176,14 @@ cpp_engine/src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.s
 .PHONY : cpp_engine/src/main.cpp.s
 
+resource.obj: resource.rc.obj
+.PHONY : resource.obj
+
+# target to build an object file
+resource.rc.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/resource.rc.obj
+.PHONY : resource.rc.obj
+
 # Help Target
 help:
 	@echo The following are some of the valid targets for this Makefile:
@@ -191,6 +199,7 @@ help:
 	@echo ... cpp_engine/src/main.obj
 	@echo ... cpp_engine/src/main.i
 	@echo ... cpp_engine/src/main.s
+	@echo ... resource.obj
 .PHONY : help
 
 

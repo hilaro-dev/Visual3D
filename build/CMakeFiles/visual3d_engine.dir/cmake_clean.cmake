@@ -3,6 +3,7 @@ file(REMOVE_RECURSE
   "CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj.d"
   "CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj"
   "CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj.d"
+  "CMakeFiles/visual3d_engine.dir/resource.rc.obj"
   "libvisual3d_engine.dll.a"
   "visual3d_engine.exe"
   "visual3d_engine.exe.manifest"
@@ -10,6 +11,6 @@ file(REMOVE_RECURSE
 )
 
 # Per-language clean rules from dependency scanning.
-foreach(lang CXX)
+foreach(lang CXX RC)
   include(CMakeFiles/visual3d_engine.dir/cmake_clean_${lang}.cmake OPTIONAL)
 endforeach()

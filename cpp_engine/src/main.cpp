@@ -2282,6 +2282,14 @@ int main(int argc, char** argv) {
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(winW, winH, "Visual3D // Raylib Mode + Clutch 3D Studio & AR Modeler");
+    const char* iconPath = FileExists("icon.png") ? "icon.png" : "../icon.png";
+    if (FileExists(iconPath)) {
+        Image icon = LoadImage(iconPath);
+        if (icon.data != nullptr) {
+            SetWindowIcon(icon);
+            UnloadImage(icon);
+        }
+    }
     SetTargetFPS(60);
 
     Camera3D camera{};

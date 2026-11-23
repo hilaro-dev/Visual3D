@@ -31,10 +31,15 @@ else()
     set(V3D_RAYLIB_TARGET v3d_raylib)
 endif()
 
-add_executable(visual3d_engine
+set(V3D_SOURCES
     "${V3D_ROOT}/src/main.cpp"
     "${V3D_ROOT}/src/FileDialog.cpp"
 )
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resource.rc")
+    list(APPEND V3D_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/resource.rc")
+endif()
+
+add_executable(visual3d_engine ${V3D_SOURCES})
 
 target_include_directories(visual3d_engine PRIVATE "${V3D_ROOT}/include")
 target_link_libraries(visual3d_engine PRIVATE
@@ -57,11 +62,14 @@ else()
     endif()
 endif()
 
-# Copy shaders and package double-clickable executables into project root
+# Copy shaders, icon, and package double-clickable executables into project root
 add_custom_command(TARGET visual3d_engine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${V3D_ROOT}/shaders"
             "$<TARGET_FILE_DIR:visual3d_engine>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/icon.png"
+            "$<TARGET_FILE_DIR:visual3d_engine>/icon.png"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:visual3d_engine>"
             "$<TARGET_FILE_DIR:visual3d_engine>/3DModeller.exe"
