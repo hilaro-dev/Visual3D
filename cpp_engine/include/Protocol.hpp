@@ -50,6 +50,13 @@ enum class RightAxis : uint8_t {
     Z = 3
 };
 
+enum class GroupAction : uint8_t {
+    SelectToggle = 0,    // Right Thumb + Index
+    Group = 1,           // Right Thumb + Middle
+    Ungroup = 2,         // Right Thumb + Ring
+    ClearSelection = 3   // Right Thumb + Pinky
+};
+
 enum StateFlags : uint8_t {
     kPinch       = 0x01,
     kFist        = 0x02,
@@ -64,7 +71,9 @@ enum ContactBits : uint8_t {
 };
 
 enum HeaderFlags : uint8_t {
-    kMirrored = 0x01
+    kMirrored     = 0x01,
+    kSpawnTrigger = 0x02,
+    kGroupTrigger = 0x04
 };
 
 #pragma pack(push, 1)
@@ -77,7 +86,7 @@ struct HandPacket {
     uint8_t contactMask = 0;   // Left Hand RGB bitmask (Middle=R, Ring=G, Pinky=B)
     uint8_t stateFlags = 0;    // StateFlags bitmask
     uint8_t fingerCount = 0;   // Extended finger count
-    uint8_t reserved = 0;
+    uint8_t reserved = 0;      // Right Hand carries GroupAction (0..3) in GROUP mode
     float score = 0.f;
     float pinchDist = 1.f;     // Normalized Thumb(4)-Index(8) distance
     float handScale = 0.f;
@@ -89,6 +98,7 @@ struct HandPacket {
     bool fist() const { return (stateFlags & kFist) != 0; }
     bool open() const { return (stateFlags & kOpen) != 0; }
     bool thumbFolded() const { return (stateFlags & kThumbFolded) != 0; }
+    GroupAction groupAction() const { return static_cast<GroupAction>(reserved & 0x03); }
 };
 
 struct TelemetryPacket {
@@ -140,6 +150,7 @@ inline bool parseTelemetry(const uint8_t* data, size_t size, TelemetryPacket& ou
     if (out.right_axis < 1 || out.right_axis > 3) out.right_axis = 1;
     out.hands[0].contactMask &= 0x07;
     out.hands[1].contactMask &= 0x07;  // Right Hand carries additive R/G/B pinch bitmask in RECOLOR mode
+    out.hands[1].reserved &= 0x03;     // Right Hand carries GroupAction (0..3) in GROUP mode
     return true;
 }
 
