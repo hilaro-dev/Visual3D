@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visual3D // Mode + Clutch 3D Studio &amp; AR Modeler (Web Port)</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app-root">
+    <!-- Fullscreen AR Camera Canvas (visible in AR OVERLAY mode) -->
+    <canvas id="ar-bg-canvas"></canvas>
+
+    <!-- Three.js 3D Viewport Canvas -->
+    <canvas id="three-canvas"></canvas>
+
+    <!-- 2D Screen-Space HUD Overlay Canvas (Reticles, Delete Progress Rings, Floating Object Pills) -->
+    <canvas id="hud-2d-canvas"></canvas>
+
+    <!-- Drag-and-Drop Overlay -->
+    <div id="drop-overlay" class="hidden">
+      <div class="drop-box">
+        <div class="drop-title">DROP .OBJ OR .3DMPROJ FILE</div>
+        <div class="drop-sub">Wavefront .OBJ meshes normalize to 20 cm (2.0 units) &bull; .3dmproj restores full scene</div>
+      </div>
+    </div>
+
+    <!-- Top-Left Telemetry Card (hidden when Clean HUD [H] is active) -->
+    <div id="telemetry-card" class="hud-panel">
+      <div class="card-title">VISUAL3D STUDIO</div>
+      <div class="card-divider"></div>
+      <div class="telemetry-rows">
+        <div id="tel-viewport" class="tel-row tel-white">VIEWPORT : STUDIO 3D [TAB]</div>
+        <div id="tel-lmode" class="tel-row tel-cyan">L-MODE   : IDLE</div>
+        <div id="tel-raxis" class="tel-row tel-axis-x">R-AXIS   : X-AXIS (Index)</div>
+        <div id="tel-clutch" class="tel-row tel-gray">CLUTCH   : NO HAND</div>
+        <div id="tel-engine" class="tel-row tel-green">ENGINE   : 60 FPS | WEBCAM INIT</div>
+        <div id="tel-scene" class="tel-row tel-skyblue">SCENE    : 4 OBJECTS (1 unit = 10 cm)</div>
+      </div>
+    </div>
+
+    <!-- Auto-Sizing Top-Center Mode Banner Pill (always visible) -->
+    <div id="mode-banner" class="mode-pill">
+      <div class="mode-pill-main">
+        <span id="mode-banner-text">IDLE [SAFE] // 1:MOVE 2:SIZE 3:ROT 4:CLR 5:GRP TU:SPAWN TD:DEL</span>
+        <span id="mode-banner-swatch" class="color-swatch hidden"></span>
+      </div>
+      <div id="mode-delete-track" class="delete-bar-track hidden">
+        <div id="mode-delete-fill" class="delete-bar-fill"></div>
+      </div>
+    </div>
+
+    <!-- Toast Notification Banner -->
+    <div id="toast-banner" class="toast-pill hidden"></div>
+
+    <!-- Bottom-Left Shortcut Legend & 8-Mode Dock (hidden when Clean HUD [H] is active) -->
+    <div id="bottom-hud">
+      <div id="shortcut-strip" class="shortcut-strip">
+        <button type="button" class="strip-btn" data-key="Tab">[TAB] View</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyP">[P] Save</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyO">[O] Open</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyI">[I] Import .OBJ</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyE">[E] Export Group</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyS">[S] Export Scene</button>
+        <span class="strip-sep">|</span>
+        <button type="button" class="strip-btn" data-key="KeyH">[H] Clean HUD</button>
+      </div>
+
+      <div id="mode-dock" class="mode-dock">
+        <button type="button" class="dock-btn active" data-mode="0">0 IDLE</button>
+        <button type="button" class="dock-btn" data-mode="1">1 MOVE</button>
+        <button type="button" class="dock-btn" data-mode="2">2 RESIZE</button>
+        <button type="button" class="dock-btn" data-mode="3">3 ROTATE</button>
+        <button type="button" class="dock-btn" data-mode="4">4 COLOR</button>
+        <button type="button" class="dock-btn dock-group" data-mode="5">5 GROUP</button>
+        <button type="button" class="dock-btn" data-mode="6">TU SPAWN</button>
+        <button type="button" class="dock-btn dock-delete" data-mode="7">TD DEL</button>
+      </div>
+    </div>
+
+    <!-- Collapsible Right-Side "? GUIDE" Manual Drawer (F1 or Click Tab) -->
+    <div id="manual-drawer-wrapper" class="drawer-closed">
+      <button type="button" id="manual-tab" title="Toggle Guide (F1)" aria-label="Toggle Guide (F1)">
+        <span class="tab-q">?</span>
+        <span class="tab-rule"></span>
+        <span class="tab-letter">G</span>
+        <span class="tab-letter">U</span>
+        <span class="tab-letter">I</span>
+        <span class="tab-letter">D</span>
+        <span class="tab-letter">E</span>
+      </button>
+
+      <aside id="manual-panel" aria-label="How To Use Manual">
+        <div class="manual-header">
+          <span class="manual-title">HOW TO USE</span>
+          <span class="manual-f1">[F1]</span>
+        </div>
+        <div class="manual-title-rule"></div>
+
+        <div class="manual-section">
+          <div class="manual-sec-title">LEFT HAND (MODES)</div>
+          <div class="manual-sec-rule"></div>
+          <div class="manual-grid-left">
+            <span class="m-trig trig-idle">0 (Fist)</span><span class="m-colon">:</span><span class="m-act">Idle / Hover Target</span>
+            <span class="m-trig trig-cyan">1 Finger</span><span class="m-colon">:</span><span class="m-act">Move</span>
+            <span class="m-trig trig-cyan">2 Fingers</span><span class="m-colon">:</span><span class="m-act">Resize</span>
+            <span class="m-trig trig-cyan">3 Fingers</span><span class="m-colon">:</span><span class="m-act">Rotate</span>
+            <span class="m-trig trig-cyan">4 Fingers</span><span class="m-colon">:</span><span class="m-act">Recolor (Additive RGB)</span>
+            <span class="m-trig trig-green">5 Fingers</span><span class="m-colon">:</span><span class="m-act">Group / Multi-Select</span>
+            <span class="m-trig trig-gold">Thumbs-Up</span><span class="m-colon">:</span><span class="m-act">Spawn Primitive</span>
+            <span class="m-trig trig-red">Thumbs-Down</span><span class="m-colon">:</span><span class="m-act">Delete (Hold 1.5s)</span>
+          </div>
+        </div>
+
+        <div class="manual-section">
+          <div class="manual-sec-title">RIGHT HAND (PINCH CLUTCH)</div>
+          <div class="manual-sec-rule"></div>
+          <div class="manual-grid-right">
+            <span class="m-rmode">Move/Size/Rot</span><span class="m-colon">:</span><span class="m-act">Idx=X &nbsp;Mid=Y &nbsp;Ring=Z &nbsp;Pinky=XYZ</span>
+            <span class="m-rmode">Recolor</span><span class="m-colon">:</span><span class="m-act">Idx=R &nbsp;Mid=G &nbsp;Ring=B (Mix Y/C/M/W)</span>
+            <span class="m-rmode">Spawn</span><span class="m-colon">:</span><span class="m-act">Idx=Cube &nbsp;Mid=Caps &nbsp;Ring=Cyl &nbsp;Pinky=Ring</span>
+            <span class="m-rmode">Group</span><span class="m-colon">:</span><span class="m-act">Idx=Sel &nbsp;Mid=Grp &nbsp;Ring=Ungrp &nbsp;Pinky=Clr</span>
+          </div>
+        </div>
+
+        <div class="manual-section">
+          <div class="manual-sec-title">KEYBOARD SHORTCUTS</div>
+          <div class="manual-sec-rule"></div>
+          <div class="manual-shortcuts">
+            <div class="sc-line">
+              <span class="sc-key">[P]</span> <span class="sc-desc">Save Project (.3dmproj)</span>
+              <span class="sc-sep">&nbsp;|&nbsp;</span>
+              <span class="sc-key">[O]</span> <span class="sc-desc">Open Project</span>
+            </div>
+            <div class="sc-line">
+              <span class="sc-key">[I]</span> <span class="sc-desc">Import .OBJ (or Drag &amp; Drop)</span>
+            </div>
+            <div class="sc-line">
+              <span class="sc-key">[E]</span> <span class="sc-desc">Export Group .OBJ</span>
+              <span class="sc-sep">&nbsp;|&nbsp;</span>
+              <span class="sc-key">[S]</span> <span class="sc-desc">Export Scene .OBJ</span>
+            </div>
+            <div class="sc-line">
+              <span class="sc-key">[H]</span> <span class="sc-desc">Minimal HUD</span>
+              <span class="sc-sep">&nbsp;|&nbsp;</span>
+              <span class="sc-key">[F1]</span> <span class="sc-desc">Toggle Guide</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Bottom-Right Studio Webcam PiP + 2D Hand Skeleton (visible in STUDIO 3D mode) -->
+    <div id="pip-container">
+      <div class="pip-header">
+        <span>CAM PiP // 2D HAND SKELETON</span>
+        <button type="button" id="cam-toggle-btn" class="pip-cam-btn" title="Retry / Toggle Webcam">CAM</button>
+      </div>
+      <canvas id="pip-canvas" width="320" height="240"></canvas>
+    </div>
+
+    <!-- Hidden Webcam Video & File Pickers -->
+    <video id="webcam-video" playsinline muted></video>
+    <input type="file" id="file-input-obj" accept=".obj" class="hidden" />
+    <input type="file" id="file-input-proj" accept=".3dmproj" class="hidden" />
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
