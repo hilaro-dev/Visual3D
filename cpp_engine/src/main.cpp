@@ -406,6 +406,7 @@ public:
         }
 
         handleKeyboardShortcuts(udp);
+        updateManualDrawer();
 
         // Drag-and-drop .3dmproj projects and external .obj meshes onto the application window
         if (!dialogOpen_ && IsFileDropped()) {
@@ -581,6 +582,8 @@ private:
     std::string measurementBadge_ = "IDLE [SAFE]";
     std::string statusLine_;
     bool cleanHud_ = false;
+    bool manualOpen_ = false;
+    float manualSlideT_ = 0.0f;
     bool dialogOpen_ = false;
     bool skipFrameAfterDialog_ = false;
     std::string toastMessage_;
@@ -1957,6 +1960,305 @@ private:
                          active ? WHITE : Color{170, 185, 205, 220});
             }
         }
+
+        drawManualDrawer(sw, sh);
+    }
+
+    struct ManualLeftRow {
+        const char* trigger;
+        const char* action;
+        Color triggerColor;
+    };
+
+    struct ManualRightRow {
+        const char* modeLabel;
+        const char* bindings;
+    };
+
+    struct ManualShortcutRow {
+        const char* key1;
+        const char* desc1;
+        const char* key2;
+        const char* desc2;
+    };
+
+    struct ManualDrawerLayout {
+        static constexpr int kPadX = 16;
+        static constexpr int kPadY = 12;
+        static constexpr float kRightMargin = 8.0f;
+
+        static constexpr int kTitleFont = 18;
+        static constexpr int kSectionFont = 14;
+        static constexpr int kBodyFont = 13;
+
+        static constexpr int kTitleBlockH = 30;     // 18px title + 5px gap + 1px rule + 6px gap
+        static constexpr int kSectionHeaderH = 22;  // 14px header + 3px gap + 1px rule + 4px gap
+        static constexpr int kLineStep = 18;
+        static constexpr int kSectionGap = 10;
+
+        static constexpr float kMinPanelW = 400.0f;
+        static constexpr float kTabW = 28.0f;
+        static constexpr float kTabH = 96.0f;
+
+        Rectangle panelRect{};
+        Rectangle tabRect{};
+        int keyColW = 0;
+        int colonGapW = 0;
+        int rightKeyColW = 0;
+        int rightColonGapW = 0;
+    };
+
+    static void drawBoldText(const char* text, int x, int y, int fontSize, Color color) {
+        DrawText(text, x, y, fontSize, color);
+        DrawText(text, x + 1, y, fontSize, color);
+    }
+
+    static const std::array<ManualLeftRow, 8>& manualLeftRows() {
+        static const std::array<ManualLeftRow, 8> rows{{
+            {"0 (Fist)",    "Idle / Hover Target",    Color{185, 200, 220, 255}},
+            {"1 Finger",    "Move",                   Color{0,   220, 255, 255}},
+            {"2 Fingers",   "Resize",                 Color{0,   220, 255, 255}},
+            {"3 Fingers",   "Rotate",                 Color{0,   220, 255, 255}},
+            {"4 Fingers",   "Recolor (Additive RGB)", Color{0,   220, 255, 255}},
+            {"5 Fingers",   "Group / Multi-Select",   Color{85,  240, 165, 255}},
+            {"Thumbs-Up",   "Spawn Primitive",        Color{255, 210,  95, 255}},
+            {"Thumbs-Down", "Delete (Hold 1.5s)",     Color{255, 105, 115, 255}},
+        }};
+        return rows;
+    }
+
+    static const std::array<ManualRightRow, 4>& manualRightRows() {
+        static const std::array<ManualRightRow, 4> rows{{
+            {"Move/Size/Rot", "Idx=X  Mid=Y  Ring=Z  Pinky=XYZ"},
+            {"Recolor",       "Idx=R  Mid=G  Ring=B (Mix Y/C/M/W)"},
+            {"Spawn",         "Idx=Cube  Mid=Caps  Ring=Cyl  Pinky=Ring"},
+            {"Group",         "Idx=Sel  Mid=Grp  Ring=Ungrp  Pinky=Clr"},
+        }};
+        return rows;
+    }
+
+    static const std::array<ManualShortcutRow, 4>& manualShortcutRows() {
+        static const std::array<ManualShortcutRow, 4> rows{{
+            {"[P]", "Save Project (.3dmproj)",      "[O]",  "Open Project"},
+            {"[I]", "Import .OBJ (or Drag & Drop)", nullptr, nullptr},
+            {"[E]", "Export Group .OBJ",            "[S]",  "Export Scene .OBJ"},
+            {"[H]", "Minimal HUD",                  "[F1]", "Toggle Guide"},
+        }};
+        return rows;
+    }
+
+    static int manualShortcutRowWidth(const ManualShortcutRow& row, int fontSize) {
+        auto pairW = [fontSize](const char* key, const char* desc) {
+            const std::string k = std::string(key) + " ";
+            return MeasureText(k.c_str(), fontSize) + MeasureText(desc, fontSize);
+        };
+        int w = pairW(row.key1, row.desc1);
+        if (row.key2 != nullptr && row.desc2 != nullptr) {
+            w += MeasureText("  |  ", fontSize) + pairW(row.key2, row.desc2);
+        }
+        return w;
+    }
+
+    static void drawManualShortcutRow(const ManualShortcutRow& row, int x, int y, int fontSize) {
+        const Color keyCol{0, 220, 255, 255};
+        const Color descCol{235, 240, 245, 255};
+        const Color sepCol{125, 145, 165, 210};
+        int curX = x;
+        auto drawPair = [&](const char* key, const char* desc) {
+            const std::string keyWithSpace = std::string(key) + " ";
+            DrawText(keyWithSpace.c_str(), curX, y, fontSize, keyCol);
+            curX += MeasureText(keyWithSpace.c_str(), fontSize);
+            DrawText(desc, curX, y, fontSize, descCol);
+            curX += MeasureText(desc, fontSize);
+        };
+        drawPair(row.key1, row.desc1);
+        if (row.key2 != nullptr && row.desc2 != nullptr) {
+            const char* sep = "  |  ";
+            DrawText(sep, curX, y, fontSize, sepCol);
+            curX += MeasureText(sep, fontSize);
+            drawPair(row.key2, row.desc2);
+        }
+    }
+
+    /// Computes balanced 400px drawer geometry anchored at y=75 above the Studio PiP.
+    ManualDrawerLayout computeManualDrawerLayout(int sw, int sh) const {
+        using M = ManualDrawerLayout;
+
+        const auto& leftRows = manualLeftRows();
+        const auto& rightRows = manualRightRows();
+        const auto& shortcutRows = manualShortcutRows();
+
+        int maxTriggerW = 0;
+        for (const auto& r : leftRows) {
+            maxTriggerW = std::max(maxTriggerW, MeasureText(r.trigger, M::kBodyFont));
+        }
+        const int colonGapW = MeasureText(" :  ", M::kBodyFont);
+
+        int maxRightKeyW = 0;
+        for (const auto& r : rightRows) {
+            maxRightKeyW = std::max(maxRightKeyW, MeasureText(r.modeLabel, M::kBodyFont));
+        }
+        const int rightColonGapW = MeasureText(": ", M::kBodyFont);
+
+        int maxContentW = MeasureText("HOW TO USE", M::kTitleFont) + 1
+                        + 20 + MeasureText("[F1]", M::kBodyFont) + 1;
+        maxContentW = std::max(maxContentW, MeasureText("LEFT HAND (MODES)", M::kSectionFont) + 1);
+        maxContentW = std::max(maxContentW, MeasureText("RIGHT HAND (PINCH CLUTCH)", M::kSectionFont) + 1);
+        maxContentW = std::max(maxContentW, MeasureText("KEYBOARD SHORTCUTS", M::kSectionFont) + 1);
+
+        for (const auto& r : leftRows) {
+            maxContentW = std::max(maxContentW, maxTriggerW + colonGapW + MeasureText(r.action, M::kBodyFont));
+        }
+        for (const auto& r : rightRows) {
+            maxContentW = std::max(maxContentW, maxRightKeyW + rightColonGapW + MeasureText(r.bindings, M::kBodyFont));
+        }
+        for (const auto& r : shortcutRows) {
+            maxContentW = std::max(maxContentW, manualShortcutRowWidth(r, M::kBodyFont));
+        }
+
+        const float panelW = std::max(M::kMinPanelW, static_cast<float>(maxContentW + 2 * M::kPadX));
+        const float panelH = static_cast<float>(
+            M::kPadY
+            + M::kTitleBlockH
+            + M::kSectionHeaderH + static_cast<int>(leftRows.size()) * M::kLineStep + M::kSectionGap
+            + M::kSectionHeaderH + static_cast<int>(rightRows.size()) * M::kLineStep + M::kSectionGap
+            + M::kSectionHeaderH + static_cast<int>(shortcutRows.size()) * M::kLineStep
+            + M::kPadY
+        );
+
+        // Anchor at y = 75 and stay strictly above Studio PiP header (`sh - 286`).
+        const float availBot = std::max(75.0f + M::kTabH, static_cast<float>(sh) - 294.0f);
+        const float panelY = std::min(75.0f, std::max(12.0f, availBot - panelH));
+        const float panelX = static_cast<float>(sw) - manualSlideT_ * (panelW + M::kRightMargin);
+
+        const float tabX = panelX - M::kTabW;
+        const float tabY = std::max(panelY, std::min(availBot - M::kTabH, panelY + (panelH - M::kTabH) * 0.5f));
+
+        ManualDrawerLayout layout;
+        layout.panelRect = Rectangle{panelX, panelY, panelW, panelH};
+        layout.tabRect = Rectangle{tabX, tabY, M::kTabW, M::kTabH};
+        layout.keyColW = maxTriggerW;
+        layout.colonGapW = colonGapW;
+        layout.rightKeyColW = maxRightKeyW;
+        layout.rightColonGapW = rightColonGapW;
+        return layout;
+    }
+
+    /// Handles `F1` / tab-click toggle and smoothly animates `manualSlideT_` via `GetFrameTime()`.
+    void updateManualDrawer() {
+        if (!dialogOpen_) {
+            if (IsKeyPressed(KEY_F1)) {
+                manualOpen_ = !manualOpen_;
+            }
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                const ManualDrawerLayout layout =
+                    computeManualDrawerLayout(GetScreenWidth(), GetScreenHeight());
+                if (CheckCollisionPointRec(GetMousePosition(), layout.tabRect)) {
+                    manualOpen_ = !manualOpen_;
+                }
+            }
+        }
+
+        const float target = manualOpen_ ? 1.0f : 0.0f;
+        const float frameDt = std::min(0.05f, std::max(0.0f, GetFrameTime()));
+        const float blend = 1.0f - std::exp(-12.0f * frameDt);
+        manualSlideT_ += (target - manualSlideT_) * blend;
+        if (std::fabs(target - manualSlideT_) < 0.001f) {
+            manualSlideT_ = target;
+        }
+    }
+
+    /// Renders the compact `? GUIDE` tab and balanced 400px dark-cyan manual drawer.
+    void drawManualDrawer(int sw, int sh) const {
+        using M = ManualDrawerLayout;
+        const ManualDrawerLayout layout = computeManualDrawerLayout(sw, sh);
+
+        // 1. Compact 28x96 vertical `? GUIDE` tab pinned to the drawer's left edge
+        const bool tabHovered = !dialogOpen_ && CheckCollisionPointRec(GetMousePosition(), layout.tabRect);
+        const Color tabFill = tabHovered ? Color{20, 32, 46, 245} : Color{10, 14, 20, 238};
+        const Color tabBorder = (manualOpen_ || tabHovered)
+            ? Color{0, 220, 255, 245}
+            : Color{0, 195, 235, 200};
+
+        DrawRectangleRounded(layout.tabRect, 0.28f, 6, tabFill);
+        DrawRectangleRoundedLinesEx(layout.tabRect, 0.28f, 6, 1.5f, tabBorder);
+
+        const int tabCx = static_cast<int>(layout.tabRect.x + layout.tabRect.width * 0.5f);
+        const int tabTop = static_cast<int>(layout.tabRect.y);
+        const int qW = MeasureText("?", 14) + 1;
+        drawBoldText("?", tabCx - qW / 2, tabTop + 6, 14, Color{0, 220, 255, 255});
+        DrawRectangle(static_cast<int>(layout.tabRect.x) + 5, tabTop + 23,
+                      static_cast<int>(layout.tabRect.width) - 10, 1, Color{0, 220, 255, 145});
+
+        const char guideLetters[5] = {'G', 'U', 'I', 'D', 'E'};
+        for (int i = 0; i < 5; ++i) {
+            const char glyph[2] = {guideLetters[i], '\0'};
+            const int gw = MeasureText(glyph, 12) + 1;
+            drawBoldText(glyph, tabCx - gw / 2, tabTop + 28 + i * 13, 12, Color{235, 240, 245, 255});
+        }
+
+        // 2. Sliding manual drawer panel
+        if (manualSlideT_ <= 0.001f) {
+            return;
+        }
+
+        const int scissorX = std::max(0, static_cast<int>(std::floor(layout.panelRect.x)) - 2);
+        const int scissorY = std::max(0, static_cast<int>(std::floor(layout.panelRect.y)) - 2);
+        const int scissorW = std::max(0, sw - scissorX);
+        const int scissorH = static_cast<int>(std::ceil(layout.panelRect.height)) + 4;
+        BeginScissorMode(scissorX, scissorY, scissorW, scissorH);
+
+        DrawRectangleRounded(layout.panelRect, 0.03f, 8, Color{10, 14, 20, 242});
+        DrawRectangleRoundedLinesEx(layout.panelRect, 0.03f, 8, 1.5f, Color{0, 220, 255, 205});
+
+        const int contentX = static_cast<int>(layout.panelRect.x) + M::kPadX;
+        const int innerW = static_cast<int>(layout.panelRect.width) - 2 * M::kPadX;
+        int y = static_cast<int>(layout.panelRect.y) + M::kPadY;
+
+        // Drawer title
+        drawBoldText("HOW TO USE", contentX, y, M::kTitleFont, Color{240, 246, 255, 255});
+        const char* f1Hint = "[F1]";
+        const int f1W = MeasureText(f1Hint, M::kBodyFont) + 1;
+        drawBoldText(f1Hint, contentX + innerW - f1W, y + 3, M::kBodyFont, Color{0, 220, 255, 255});
+        DrawRectangle(contentX, y + 23, innerW, 1, Color{0, 220, 255, 140});
+        y += M::kTitleBlockH;
+
+        auto drawSectionTitle = [&](const char* title) {
+            drawBoldText(title, contentX, y, M::kSectionFont, Color{0, 220, 255, 255});
+            DrawRectangle(contentX, y + 17, innerW, 1, Color{0, 220, 255, 95});
+            y += M::kSectionHeaderH;
+        };
+
+        // Section 1: Left Hand Modes
+        drawSectionTitle("LEFT HAND (MODES)");
+        for (const auto& row : manualLeftRows()) {
+            DrawText(row.trigger, contentX, y, M::kBodyFont, row.triggerColor);
+            DrawText(":", contentX + layout.keyColW + 5, y, M::kBodyFont, Color{140, 160, 180, 230});
+            DrawText(row.action, contentX + layout.keyColW + layout.colonGapW, y,
+                     M::kBodyFont, Color{235, 240, 245, 255});
+            y += M::kLineStep;
+        }
+        y += M::kSectionGap;
+
+        // Section 2: Right Hand Pinch Clutch
+        drawSectionTitle("RIGHT HAND (PINCH CLUTCH)");
+        for (const auto& row : manualRightRows()) {
+            DrawText(row.modeLabel, contentX, y, M::kBodyFont, Color{135, 225, 250, 255});
+            DrawText(":", contentX + layout.rightKeyColW + 2, y, M::kBodyFont, Color{140, 160, 180, 230});
+            DrawText(row.bindings, contentX + layout.rightKeyColW + layout.rightColonGapW, y,
+                     M::kBodyFont, Color{235, 240, 245, 255});
+            y += M::kLineStep;
+        }
+        y += M::kSectionGap;
+
+        // Section 3: Keyboard Shortcuts
+        drawSectionTitle("KEYBOARD SHORTCUTS");
+        for (const auto& row : manualShortcutRows()) {
+            drawManualShortcutRow(row, contentX, y, M::kBodyFont);
+            y += M::kLineStep;
+        }
+
+        EndScissorMode();
     }
 };
 
