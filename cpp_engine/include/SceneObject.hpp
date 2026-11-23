@@ -19,11 +19,13 @@
 #include <rlgl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,8 +44,11 @@ enum class PrimitiveType : int {
     Capsule = 1,
     Cylinder = 2,
     Torus = 3,
-    Count = 4
+    ImportedObj = 4,
+    Count = 5
 };
+
+inline constexpr PrimitiveType PRIMITIVE_IMPORTED_OBJ = PrimitiveType::ImportedObj;
 
 inline const char* primitiveName(PrimitiveType t) {
     switch (t) {
@@ -51,8 +56,28 @@ inline const char* primitiveName(PrimitiveType t) {
         case PrimitiveType::Capsule: return "CAPSULE";
         case PrimitiveType::Cylinder: return "CYLINDER";
         case PrimitiveType::Torus: return "RING";
+        case PrimitiveType::ImportedObj: return "OBJ";
         default: return "OBJECT";
     }
+}
+
+inline std::string extractFilename(const std::string& path) {
+    if (path.empty()) return "";
+    const size_t pos = path.find_last_of("\\/");
+    return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+inline std::string sanitizeObjIdentifier(const std::string& name) {
+    std::string out;
+    out.reserve(name.size());
+    for (unsigned char c : name) {
+        if (std::isalnum(c) || c == '_' || c == '-') {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('_');
+        }
+    }
+    return out.empty() ? std::string("Object") : out;
 }
 
 inline float snapToStep(float value, float step) {
@@ -75,6 +100,42 @@ struct ObjectTransform {
     }
 };
 
+// ---------------------------------------------------------------------------
+// CPU-backed Base Mesh Cache & Normalized Imported .OBJ Asset Container
+// ---------------------------------------------------------------------------
+struct CpuTriangleMesh {
+    std::vector<Vector3> vertices;
+    std::vector<Vector3> normals;
+    std::vector<uint32_t> indices;  // 3 indices per triangle
+};
+
+struct ImportedModelAsset {
+    Model model{};
+    bool hasModel = false;
+    std::string displayName;
+    std::string sourcePath;
+    Vector3 pivotOffset{0.0f, 0.0f, 0.0f};
+    float normScale = 1.0f;
+    BoundingBox normalizedLocalBox{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+    CpuTriangleMesh cpuMesh{};
+
+    ImportedModelAsset() = default;
+    ~ImportedModelAsset() {
+        if (hasModel) {
+            UnloadModel(model);
+            hasModel = false;
+        }
+    }
+    ImportedModelAsset(const ImportedModelAsset&) = delete;
+    ImportedModelAsset& operator=(const ImportedModelAsset&) = delete;
+
+    Matrix normMatrix() const {
+        return MatrixMultiply(
+            MatrixTranslate(pivotOffset.x, pivotOffset.y, pivotOffset.z),
+            MatrixScale(normScale, normScale, normScale));
+    }
+};
+
 struct SceneObject {
     uint32_t id = 0;
     PrimitiveType type = PrimitiveType::Cube;
@@ -84,18 +145,138 @@ struct SceneObject {
     int groupId = -1;                   // -1 = ungrouped; >= 0 = shared group ID
     bool isSelected = false;
     bool isHovered = false;
+    std::shared_ptr<ImportedModelAsset> importedModel;
 
     Matrix matrix() const { return transform.toMatrix(); }
+
+    std::string displayLabel() const {
+        if (type == PrimitiveType::ImportedObj && importedModel && !importedModel->displayName.empty()) {
+            return importedModel->displayName;
+        }
+        return primitiveName(type);
+    }
 };
 
-// ---------------------------------------------------------------------------
-// CPU-backed Base Mesh Cache (for both Raylib `Model` rendering & `.OBJ` export)
-// ---------------------------------------------------------------------------
-struct CpuTriangleMesh {
-    std::vector<Vector3> vertices;
-    std::vector<Vector3> normals;
-    std::vector<uint32_t> indices;  // 3 indices per triangle
-};
+inline void ComputeNormalizationParams(const BoundingBox& rawBox,
+                                       float targetExtent,
+                                       Vector3& outPivot,
+                                       float& outScale,
+                                       BoundingBox& outNormBox) {
+    const Vector3 rawCenter{
+        0.5f * (rawBox.min.x + rawBox.max.x),
+        0.5f * (rawBox.min.y + rawBox.max.y),
+        0.5f * (rawBox.min.z + rawBox.max.z),
+    };
+    const float extX = std::max(0.0f, rawBox.max.x - rawBox.min.x);
+    const float extY = std::max(0.0f, rawBox.max.y - rawBox.min.y);
+    const float extZ = std::max(0.0f, rawBox.max.z - rawBox.min.z);
+    const float maxExtent = std::max({extX, extY, extZ, 1e-5f});
+
+    outPivot = {-rawCenter.x, -rawCenter.y, -rawCenter.z};
+    outScale = targetExtent / maxExtent;
+    outNormBox.min = {
+        (rawBox.min.x + outPivot.x) * outScale,
+        (rawBox.min.y + outPivot.y) * outScale,
+        (rawBox.min.z + outPivot.z) * outScale,
+    };
+    outNormBox.max = {
+        (rawBox.max.x + outPivot.x) * outScale,
+        (rawBox.max.y + outPivot.y) * outScale,
+        (rawBox.max.z + outPivot.z) * outScale,
+    };
+}
+
+inline CpuTriangleMesh ExtractNormalizedCpuMesh(const Model& model, const Matrix& normMat) {
+    CpuTriangleMesh out;
+    for (int m = 0; m < model.meshCount; ++m) {
+        const Mesh& mesh = model.meshes[m];
+        if (!mesh.vertices || mesh.vertexCount <= 0) continue;
+
+        const uint32_t baseVertex = static_cast<uint32_t>(out.vertices.size());
+        const size_t triStartIdx = out.indices.size();
+
+        for (int v = 0; v < mesh.vertexCount; ++v) {
+            const Vector3 rawV{
+                mesh.vertices[v * 3 + 0],
+                mesh.vertices[v * 3 + 1],
+                mesh.vertices[v * 3 + 2],
+            };
+            out.vertices.push_back(Vector3Transform(rawV, normMat));
+            if (mesh.normals) {
+                Vector3 rawN{
+                    mesh.normals[v * 3 + 0],
+                    mesh.normals[v * 3 + 1],
+                    mesh.normals[v * 3 + 2],
+                };
+                const float nLen = Vector3Length(rawN);
+                out.normals.push_back(nLen > 1e-6f ? Vector3Scale(rawN, 1.0f / nLen)
+                                                   : Vector3{0.0f, 1.0f, 0.0f});
+            } else {
+                out.normals.push_back({0.0f, 1.0f, 0.0f});
+            }
+        }
+
+        if (mesh.indices && mesh.triangleCount > 0) {
+            for (int k = 0; k < mesh.triangleCount * 3; ++k) {
+                out.indices.push_back(baseVertex + mesh.indices[k]);
+            }
+        } else {
+            const int usableVerts = (mesh.vertexCount / 3) * 3;
+            for (int k = 0; k < usableVerts; ++k) {
+                out.indices.push_back(baseVertex + static_cast<uint32_t>(k));
+            }
+        }
+
+        // Synthesize flat face normals when the source .obj lacked `vn` entries
+        if (!mesh.normals) {
+            for (size_t i = triStartIdx; i + 2 < out.indices.size(); i += 3) {
+                const uint32_t i0 = out.indices[i + 0];
+                const uint32_t i1 = out.indices[i + 1];
+                const uint32_t i2 = out.indices[i + 2];
+                const Vector3 e1 = Vector3Subtract(out.vertices[i1], out.vertices[i0]);
+                const Vector3 e2 = Vector3Subtract(out.vertices[i2], out.vertices[i0]);
+                Vector3 fn = Vector3CrossProduct(e1, e2);
+                const float len = Vector3Length(fn);
+                if (len > 1e-6f) {
+                    fn = Vector3Scale(fn, 1.0f / len);
+                    out.normals[i0] = fn;
+                    out.normals[i1] = fn;
+                    out.normals[i2] = fn;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+inline std::shared_ptr<ImportedModelAsset> LoadNormalizedOBJAsset(const std::string& filepath,
+                                                                  float targetExtent = 2.0f) {
+    if (filepath.empty()) return nullptr;
+    Model mdl = LoadModel(filepath.c_str());
+    if (mdl.meshCount <= 0) {
+        if (mdl.materialCount > 0 || mdl.meshes != nullptr) UnloadModel(mdl);
+        return nullptr;
+    }
+
+    const BoundingBox rawBox = GetModelBoundingBox(mdl);
+    auto asset = std::make_shared<ImportedModelAsset>();
+    asset->model = mdl;
+    asset->hasModel = true;
+    asset->sourcePath = filepath;
+    asset->displayName = extractFilename(filepath);
+    ComputeNormalizationParams(rawBox, targetExtent,
+                               asset->pivotOffset, asset->normScale, asset->normalizedLocalBox);
+    asset->cpuMesh = ExtractNormalizedCpuMesh(mdl, asset->normMatrix());
+
+    if (asset->cpuMesh.vertices.empty() || asset->cpuMesh.indices.size() < 3) {
+        return nullptr;
+    }
+
+    for (int i = 0; i < asset->model.materialCount; ++i) {
+        asset->model.materials[i].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    }
+    return asset;
+}
 
 class PrimitiveLibrary {
 public:
@@ -227,11 +408,11 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Wavefront .OBJ Exporter (`ExportSceneToOBJ`)
+// Wavefront .OBJ Exporter (`ExportObjectsToOBJ` & `ExportSceneToOBJ`)
 // ---------------------------------------------------------------------------
-inline bool ExportSceneToOBJ(const std::string& filename,
-                             const std::vector<SceneObject>& objects,
-                             const PrimitiveLibrary& lib) {
+inline bool ExportObjectsToOBJ(const std::string& filename,
+                               const std::vector<SceneObject>& objects,
+                               const PrimitiveLibrary& lib) {
     std::ofstream out(filename);
     if (!out.is_open()) return false;
 
@@ -242,46 +423,59 @@ inline bool ExportSceneToOBJ(const std::string& filename,
 
     uint32_t vertexOffset = 1;  // Wavefront .obj indices are 1-based
     for (const SceneObject& obj : objects) {
-        out << "o " << primitiveName(obj.type) << "_" << obj.id;
+        const CpuTriangleMesh* base = nullptr;
+        if (obj.type == PrimitiveType::ImportedObj) {
+            if (obj.importedModel && !obj.importedModel->cpuMesh.vertices.empty()) {
+                base = &obj.importedModel->cpuMesh;
+            }
+        } else {
+            base = &lib.cpuMesh(obj.type);
+        }
+        if (!base || base->vertices.empty()) continue;
+
+        out << "o " << sanitizeObjIdentifier(obj.displayLabel()) << "_" << obj.id;
         if (obj.groupId >= 0) out << "_Group" << obj.groupId;
         out << "\n";
         if (obj.groupId >= 0) {
             out << "g Group_" << obj.groupId << "\n";
         }
 
-        // Compose transform matrix using MatrixMultiply from raymath.h:
-        // M = Scale * Rotation * Translation
-        const Matrix matScale = MatrixScale(obj.transform.scale.x,
-                                            obj.transform.scale.y,
-                                            obj.transform.scale.z);
+        // Compose world transform matrix: M = Scale * Rotation * Translation
+        const Matrix worldMat = obj.matrix();
         const Matrix matRot = obj.transform.rotMatrix;
-        const Matrix matTrans = MatrixTranslate(obj.transform.position.x,
-                                                obj.transform.position.y,
-                                                obj.transform.position.z);
-        const Matrix worldMat = MatrixMultiply(MatrixMultiply(matScale, matRot), matTrans);
+        const float invSx = 1.0f / ((std::abs(obj.transform.scale.x) > 1e-5f) ? obj.transform.scale.x : 1.0f);
+        const float invSy = 1.0f / ((std::abs(obj.transform.scale.y) > 1e-5f) ? obj.transform.scale.y : 1.0f);
+        const float invSz = 1.0f / ((std::abs(obj.transform.scale.z) > 1e-5f) ? obj.transform.scale.z : 1.0f);
 
-        const CpuTriangleMesh& base = lib.cpuMesh(obj.type);
-        for (const Vector3& v : base.vertices) {
-            // Multiply base vertex by current Raylib transform matrix
+        for (const Vector3& v : base->vertices) {
             const Vector3 tv = Vector3Transform(v, worldMat);
             out << "v " << tv.x << " " << tv.y << " " << tv.z << "\n";
         }
-        for (const Vector3& n : base.normals) {
-            const Vector3 tn = Vector3Normalize(Vector3Transform(n, matRot));
+        for (const Vector3& n : base->normals) {
+            const Vector3 scaledN{n.x * invSx, n.y * invSy, n.z * invSz};
+            Vector3 tn = Vector3Transform(scaledN, matRot);
+            const float nLen = Vector3Length(tn);
+            tn = (nLen > 1e-6f) ? Vector3Scale(tn, 1.0f / nLen) : Vector3{0.0f, 1.0f, 0.0f};
             out << "vn " << tn.x << " " << tn.y << " " << tn.z << "\n";
         }
-        for (size_t i = 0; i + 2 < base.indices.size(); i += 3) {
-            const uint32_t i0 = vertexOffset + base.indices[i + 0];
-            const uint32_t i1 = vertexOffset + base.indices[i + 1];
-            const uint32_t i2 = vertexOffset + base.indices[i + 2];
+        for (size_t i = 0; i + 2 < base->indices.size(); i += 3) {
+            const uint32_t i0 = vertexOffset + base->indices[i + 0];
+            const uint32_t i1 = vertexOffset + base->indices[i + 1];
+            const uint32_t i2 = vertexOffset + base->indices[i + 2];
             out << "f " << i0 << "//" << i0 << " "
                         << i1 << "//" << i1 << " "
                         << i2 << "//" << i2 << "\n";
         }
         out << "\n";
-        vertexOffset += static_cast<uint32_t>(base.vertices.size());
+        vertexOffset += static_cast<uint32_t>(base->vertices.size());
     }
-    return true;
+    return out.good();
+}
+
+inline bool ExportSceneToOBJ(const std::string& filename,
+                             const std::vector<SceneObject>& objects,
+                             const PrimitiveLibrary& lib) {
+    return ExportObjectsToOBJ(filename, objects, lib);
 }
 
 }  // namespace v3d

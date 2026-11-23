@@ -84,12 +84,12 @@ clean: CMakeFiles/visual3d_engine.dir/clean
 CMakeFiles/visual3d_engine.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=1,2 "Built target visual3d_engine"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=1,2,3 "Built target visual3d_engine"
 .PHONY : CMakeFiles/visual3d_engine.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/visual3d_engine.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles 3
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 CMakeFiles/visual3d_engine.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles 0
 .PHONY : CMakeFiles/visual3d_engine.dir/rule
@@ -101,7 +101,7 @@ visual3d_engine: CMakeFiles/visual3d_engine.dir/rule
 # codegen rule for target.
 CMakeFiles/visual3d_engine.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=1,2 "Finished codegen for target visual3d_engine"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=1,2,3 "Finished codegen for target visual3d_engine"
 .PHONY : CMakeFiles/visual3d_engine.dir/codegen
 
 # clean rule for target.

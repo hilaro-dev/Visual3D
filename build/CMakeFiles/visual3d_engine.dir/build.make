@@ -86,20 +86,37 @@ CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.s"
 	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zeynep\Desktop\projects\Visual3D\cpp_engine\src\main.cpp -o CMakeFiles\visual3d_engine.dir\cpp_engine\src\main.cpp.s
 
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj: CMakeFiles/visual3d_engine.dir/flags.make
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj: CMakeFiles/visual3d_engine.dir/includes_CXX.rsp
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj: C:/Users/Zeynep/Desktop/projects/Visual3D/cpp_engine/src/FileDialog.cpp
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj: CMakeFiles/visual3d_engine.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj -MF CMakeFiles\visual3d_engine.dir\cpp_engine\src\FileDialog.cpp.obj.d -o CMakeFiles\visual3d_engine.dir\cpp_engine\src\FileDialog.cpp.obj -c C:\Users\Zeynep\Desktop\projects\Visual3D\cpp_engine\src\FileDialog.cpp
+
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.i"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\Users\Zeynep\Desktop\projects\Visual3D\cpp_engine\src\FileDialog.cpp > CMakeFiles\visual3d_engine.dir\cpp_engine\src\FileDialog.cpp.i
+
+CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.s"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zeynep\Desktop\projects\Visual3D\cpp_engine\src\FileDialog.cpp -o CMakeFiles\visual3d_engine.dir\cpp_engine\src\FileDialog.cpp.s
+
 # Object files for target visual3d_engine
 visual3d_engine_OBJECTS = \
-"CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj"
+"CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj" \
+"CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj"
 
 # External object files for target visual3d_engine
 visual3d_engine_EXTERNAL_OBJECTS =
 
 visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj
+visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj
 visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/build.make
 visual3d_engine.exe: C:/msys64/ucrt64/lib/libraylib.dll.a
 visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/linkLibs.rsp
 visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/objects1.rsp
 visual3d_engine.exe: CMakeFiles/visual3d_engine.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable visual3d_engine.exe"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\Users\Zeynep\Desktop\projects\Visual3D\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable visual3d_engine.exe"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles\visual3d_engine.dir\link.txt --verbose=$(VERBOSE)
 	"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/Zeynep/Desktop/projects/Visual3D/cpp_engine/shaders C:/Users/Zeynep/Desktop/projects/Visual3D/build/shaders
 	"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different C:/Users/Zeynep/Desktop/projects/Visual3D/build/visual3d_engine.exe C:/Users/Zeynep/Desktop/projects/Visual3D/build/3DModeller.exe

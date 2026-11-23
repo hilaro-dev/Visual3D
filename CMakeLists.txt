@@ -33,6 +33,7 @@ endif()
 
 add_executable(visual3d_engine
     "${V3D_ROOT}/src/main.cpp"
+    "${V3D_ROOT}/src/FileDialog.cpp"
 )
 
 target_include_directories(visual3d_engine PRIVATE "${V3D_ROOT}/include")
@@ -43,7 +44,7 @@ target_link_libraries(visual3d_engine PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(visual3d_engine PRIVATE ws2_32 gdi32 winmm user32 shell32)
+    target_link_libraries(visual3d_engine PRIVATE ws2_32 gdi32 winmm user32 shell32 comdlg32)
 endif()
 
 if(MSVC)

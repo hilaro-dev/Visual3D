@@ -128,6 +128,30 @@ visual3d_engine/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/build
 .PHONY : visual3d_engine/fast
 
+cpp_engine/src/FileDialog.obj: cpp_engine/src/FileDialog.cpp.obj
+.PHONY : cpp_engine/src/FileDialog.obj
+
+# target to build an object file
+cpp_engine/src/FileDialog.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj
+.PHONY : cpp_engine/src/FileDialog.cpp.obj
+
+cpp_engine/src/FileDialog.i: cpp_engine/src/FileDialog.cpp.i
+.PHONY : cpp_engine/src/FileDialog.i
+
+# target to preprocess a source file
+cpp_engine/src/FileDialog.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.i
+.PHONY : cpp_engine/src/FileDialog.cpp.i
+
+cpp_engine/src/FileDialog.s: cpp_engine/src/FileDialog.cpp.s
+.PHONY : cpp_engine/src/FileDialog.s
+
+# target to generate assembly for a file
+cpp_engine/src/FileDialog.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\visual3d_engine.dir\build.make CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.s
+.PHONY : cpp_engine/src/FileDialog.cpp.s
+
 cpp_engine/src/main.obj: cpp_engine/src/main.cpp.obj
 .PHONY : cpp_engine/src/main.obj
 
@@ -161,6 +185,9 @@ help:
 	@echo ... edit_cache
 	@echo ... rebuild_cache
 	@echo ... visual3d_engine
+	@echo ... cpp_engine/src/FileDialog.obj
+	@echo ... cpp_engine/src/FileDialog.i
+	@echo ... cpp_engine/src/FileDialog.s
 	@echo ... cpp_engine/src/main.obj
 	@echo ... cpp_engine/src/main.i
 	@echo ... cpp_engine/src/main.s

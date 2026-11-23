@@ -37,6 +37,7 @@
 #include "UDPReceiver.hpp"
 #include "ProcessManager.hpp"
 #include "SceneObject.hpp"
+#include "FileDialog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -166,6 +167,9 @@ public:
     }
 
     void shutdown() {
+        // Release imported Raylib Model GPU resources before CloseWindow() invalidates GL.
+        objects_.clear();
+        activeObjectIdx_ = -1;
         if (camTex_.id != 0) UnloadTexture(camTex_);
         primitives_.shutdown();
     }
@@ -186,7 +190,7 @@ public:
         deleteHoldTimer_ = 0.0f;
         deleteCooldownTimer_ = 0.0f;
         measurementBadge_ = "IDLE [SAFE] // 1:MOVE 2:SIZE 3:ROT 4:CLR 5:GRP TU:SPAWN TD:DEL";
-        statusLine_ = "TAB: Toggle AR/Studio View | G: Group Selected | E: Export .OBJ | 1-4: Shape";
+        statusLine_ = "Drag & Drop .OBJ onto window | G: Group | U: Ungroup | C: Clear | R: Reset";
     }
 
     SceneObject& spawnObject(PrimitiveType type, Vector3 pos, Color col) {
@@ -209,7 +213,7 @@ public:
         return objects_.back();
     }
 
-    void handleKeyboardShortcuts() {
+    void handleKeyboardShortcuts(UDPReceiver& udp) {
         if (IsKeyPressed(KEY_TAB)) {
             viewportMode_ = (viewportMode_ == ViewportMode::Studio3D) ? ViewportMode::ArCamera
                                                                       : ViewportMode::Studio3D;
@@ -246,13 +250,60 @@ public:
             activeObjectIdx_ = static_cast<int>(objects_.size()) - 1;
             statusLine_ = std::string("SPAWNED ") + primitiveName(activeShape_);
         }
+        if (IsKeyPressed(KEY_I)) {
+            std::string openPath;
+            runModalDialogGuard(udp, [&]() {
+                openPath = OpenOBJFileDialog(GetWindowHandle());
+            });
+            if (!openPath.empty()) {
+                importOBJFile(openPath);
+            }
+        }
         if (IsKeyPressed(KEY_E)) {
-            const std::string path = "scene_export.obj";
-            if (ExportSceneToOBJ(path, objects_, primitives_)) {
-                statusLine_ = "EXPORTED WAVEFRONT .OBJ -> " + path + " (" +
-                              std::to_string(objects_.size()) + " objects)";
+            bool isGroup = false;
+            const std::vector<int> exportIdx = collectGroupExportTargets(isGroup);
+            if (exportIdx.empty()) {
+                showToast("NOTHING TO EXPORT: SELECT AN OBJECT OR GROUP FIRST", true);
             } else {
-                statusLine_ = "ERROR: FAILED TO WRITE " + path;
+                std::string savePath;
+                runModalDialogGuard(udp, [&]() {
+                    savePath = SaveOBJFileDialog("group_export.obj", GetWindowHandle());
+                });
+                if (!savePath.empty()) {
+                    std::vector<SceneObject> subset;
+                    subset.reserve(exportIdx.size());
+                    for (int idx : exportIdx) subset.push_back(objects_[idx]);
+                    const std::string base = extractFilename(savePath);
+                    if (ExportObjectsToOBJ(savePath, subset, primitives_)) {
+                        if (isGroup || subset.size() > 1) {
+                            showToast("EXPORTED GROUP (" + std::to_string(subset.size()) +
+                                      " objects) -> " + base, false);
+                        } else {
+                            showToast("EXPORTED OBJECT (1 object) -> " + base, false);
+                        }
+                    } else {
+                        showToast("ERROR: FAILED TO WRITE " + base, true);
+                    }
+                }
+            }
+        }
+        if (IsKeyPressed(KEY_S)) {
+            if (objects_.empty()) {
+                showToast("SCENE IS EMPTY: NOTHING TO EXPORT", true);
+            } else {
+                std::string savePath;
+                runModalDialogGuard(udp, [&]() {
+                    savePath = SaveOBJFileDialog("scene_export.obj", GetWindowHandle());
+                });
+                if (!savePath.empty()) {
+                    const std::string base = extractFilename(savePath);
+                    if (ExportObjectsToOBJ(savePath, objects_, primitives_)) {
+                        showToast("EXPORTED SCENE (" + std::to_string(objects_.size()) +
+                                  " objects) -> " + base, false);
+                    } else {
+                        showToast("ERROR: FAILED TO WRITE " + base, true);
+                    }
+                }
             }
         }
         if (IsKeyPressed(KEY_C)) {
@@ -292,7 +343,28 @@ public:
     }
 
     void update(float dt, UDPReceiver& udp) {
-        handleKeyboardShortcuts();
+        if (toastTimer_ > 0.0f) {
+            toastTimer_ = std::max(0.0f, toastTimer_ - dt);
+        }
+
+        handleKeyboardShortcuts(udp);
+
+        // Drag-and-drop external .OBJ importing onto the application window
+        if (!dialogOpen_ && IsFileDropped()) {
+            FilePathList dropped = LoadDroppedFiles();
+            bool anyNonObj = false;
+            for (unsigned int i = 0; i < dropped.count; ++i) {
+                if (dropped.paths[i] && hasObjExtension(dropped.paths[i])) {
+                    importOBJFile(dropped.paths[i]);
+                } else {
+                    anyNonObj = true;
+                }
+            }
+            if (anyNonObj) {
+                showToast("DRAG & DROP: ONLY .OBJ FILES ARE SUPPORTED", true);
+            }
+            UnloadDroppedFiles(dropped);
+        }
 
         // 1. Update live webcam Texture2D if a new video frame arrived over UDP
         VideoFrame vf;
@@ -355,6 +427,10 @@ public:
         }
 
         // 3. Execute "Mode + Clutch" Anchor & Snapped Delta State Machine
+        if (skipFrameAfterDialog_) {
+            skipFrameAfterDialog_ = false;
+            return;
+        }
         runModeClutchStateMachine(dt);
     }
 
@@ -442,6 +518,98 @@ private:
 
     std::string measurementBadge_ = "IDLE [SAFE]";
     std::string statusLine_;
+    bool dialogOpen_ = false;
+    bool skipFrameAfterDialog_ = false;
+    std::string toastMessage_;
+    float toastTimer_ = 0.0f;
+    bool toastIsError_ = false;
+
+    void showToast(const std::string& msg, bool isError = false, float duration = 4.0f) {
+        toastMessage_ = msg;
+        toastIsError_ = isError;
+        toastTimer_ = duration;
+        statusLine_ = msg;
+    }
+
+    static bool hasObjExtension(const std::string& path) {
+        if (path.size() < 4) return false;
+        const size_t n = path.size();
+        return std::tolower(static_cast<unsigned char>(path[n - 4])) == '.' &&
+               std::tolower(static_cast<unsigned char>(path[n - 3])) == 'o' &&
+               std::tolower(static_cast<unsigned char>(path[n - 2])) == 'b' &&
+               std::tolower(static_cast<unsigned char>(path[n - 1])) == 'j';
+    }
+
+    template <typename Fn>
+    void runModalDialogGuard(UDPReceiver& udp, Fn&& fn) {
+        dialogOpen_ = true;
+        isPinching_ = false;
+        wasPinching_ = false;
+        spawnTriggerFromPkt_ = false;
+        groupTriggerFromPkt_ = false;
+        deleteHoldTimer_ = 0.0f;
+        fn();
+        proto::TelemetryPacket discard{};
+        udp.latest(discard);
+        skipFrameAfterDialog_ = true;
+        dialogOpen_ = false;
+    }
+
+    bool importOBJFile(const std::string& filepath) {
+        auto asset = LoadNormalizedOBJAsset(filepath, 2.0f);
+        if (!asset) {
+            showToast("IMPORT FAILED: " + extractFilename(filepath), true);
+            return false;
+        }
+        SceneObject obj{};
+        obj.id = nextId_++;
+        obj.type = PRIMITIVE_IMPORTED_OBJ;
+        obj.transform.position = {0.0f, 0.0f, 0.0f};
+        obj.transform.scale = {1.0f, 1.0f, 1.0f};
+        obj.transform.rotationDeg = {0.0f, 0.0f, 0.0f};
+        obj.transform.rotMatrix = MatrixIdentity();
+        obj.anchorTransform = obj.transform;
+        obj.color = Color{215, 225, 240, 255};
+        obj.groupId = -1;
+        obj.isSelected = false;
+        obj.importedModel = asset;
+        objects_.push_back(std::move(obj));
+        activeObjectIdx_ = static_cast<int>(objects_.size()) - 1;
+        showToast("IMPORTED: " + asset->displayName, false);
+        return true;
+    }
+
+    std::vector<int> collectGroupExportTargets(bool& outIsGroup) const {
+        std::vector<int> indices;
+        outIsGroup = false;
+        if (activeObjectIdx_ >= 0 && activeObjectIdx_ < static_cast<int>(objects_.size()) &&
+            objects_[activeObjectIdx_].groupId >= 0) {
+            outIsGroup = true;
+            return collectGroupMembers(activeObjectIdx_);
+        }
+        const int selCount = countSelectedObjects();
+        if (selCount >= 2) {
+            outIsGroup = true;
+            for (size_t i = 0; i < objects_.size(); ++i) {
+                if (objects_[i].isSelected) {
+                    for (int m : collectGroupMembers(static_cast<int>(i))) indices.push_back(m);
+                }
+            }
+            std::sort(indices.begin(), indices.end());
+            indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+            return indices;
+        }
+        if (activeObjectIdx_ >= 0 && activeObjectIdx_ < static_cast<int>(objects_.size())) {
+            indices.push_back(activeObjectIdx_);
+            return indices;
+        }
+        if (selCount == 1) {
+            for (size_t i = 0; i < objects_.size(); ++i) {
+                if (objects_[i].isSelected) return collectGroupMembers(static_cast<int>(i));
+            }
+        }
+        return indices;
+    }
 
     // --- Helper: find object closest to 3D cursor --------------------------
     // Measures 2D (X, Y) distance + 0.25-weighted Z distance so objects shifted
@@ -561,10 +729,13 @@ private:
     }
 
     BoundingBox computeWorldBoundingBox(const SceneObject& obj, float pad = 0.08f) const {
-        const Model& mdl = primitives_.model(obj.type);
-        const BoundingBox localBox =
-            (mdl.meshCount > 0) ? GetMeshBoundingBox(mdl.meshes[0])
-                                : BoundingBox{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+        BoundingBox localBox{{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+        if (obj.type == PrimitiveType::ImportedObj && obj.importedModel) {
+            localBox = obj.importedModel->normalizedLocalBox;
+        } else {
+            const Model& mdl = primitives_.model(obj.type);
+            if (mdl.meshCount > 0) localBox = GetMeshBoundingBox(mdl.meshes[0]);
+        }
         const Matrix mat = obj.matrix();
         const Vector3 corners[8] = {
             {localBox.min.x, localBox.min.y, localBox.min.z},
@@ -612,7 +783,7 @@ private:
                 }
                 activeObjectIdx_ = targetIdx;
                 statusLine_ = std::string(nextSel ? "SELECTED " : "DESELECTED ") +
-                              primitiveName(objects_[targetIdx].type) + " #" +
+                              objects_[targetIdx].displayLabel() + " #" +
                               std::to_string(objects_[targetIdx].id) + " (" +
                               std::to_string(countSelectedObjects()) + " SELECTED)";
                 break;
@@ -891,7 +1062,7 @@ private:
                                            : deleteTargets[0];
                     const int deletedGroupId = objects_[refIdx].groupId;
                     const uint32_t deletedId = objects_[refIdx].id;
-                    const PrimitiveType deletedType = objects_[refIdx].type;
+                    const std::string deletedLabel = objects_[refIdx].displayLabel();
                     const size_t deletedCount = deleteTargets.size();
 
                     for (auto it = deleteTargets.rbegin(); it != deleteTargets.rend(); ++it) {
@@ -921,7 +1092,7 @@ private:
                         }
                     } else {
                         std::snprintf(delMsg, sizeof(delMsg), "DELETED [%s #%u] // COOLDOWN 1.0s",
-                                      primitiveName(deletedType), deletedId);
+                                      deletedLabel.c_str(), deletedId);
                     }
                     statusLine_ = delMsg;
                 }
@@ -965,7 +1136,7 @@ private:
                     } else {
                         std::snprintf(badge, sizeof(badge),
                                       "IDLE [AIM TO SELECT] | TARGET: %s #%u | AXIS: %s",
-                                      primitiveName(sel.type), sel.id, axStr);
+                                      sel.displayLabel().c_str(), sel.id, axStr);
                     }
                 } else {
                     std::snprintf(badge, sizeof(badge), "IDLE [AIM TO SELECT] | NO TARGET | AXIS: %s",
@@ -1042,8 +1213,12 @@ private:
             const bool activeTarget = isObjectInActiveTarget(i);
             const bool idleHoverTarget =
                 (leftMode_ == proto::LeftMode::Idle) && isObjectInActiveHover(i);
-            Model& mdl = primitives_.model(obj.type);
-            mdl.transform = obj.matrix();
+            const bool isImported = (obj.type == PrimitiveType::ImportedObj &&
+                                     obj.importedModel && obj.importedModel->hasModel);
+            Model& mdl = isImported ? obj.importedModel->model : primitives_.model(obj.type);
+            mdl.transform = isImported
+                ? MatrixMultiply(obj.importedModel->normMatrix(), obj.matrix())
+                : obj.matrix();
 
             Color fillCol = obj.color;
             fillCol.a = 210;
@@ -1326,23 +1501,27 @@ private:
             }
 
             const bool showLockedTag = lockedMode && isSelectedTarget;
-            char tag[112];
+            float dimX = obj.transform.scale.x * kCmPerWorldUnit;
+            float dimY = obj.transform.scale.y * kCmPerWorldUnit;
+            float dimZ = obj.transform.scale.z * kCmPerWorldUnit;
+            if (obj.type == PrimitiveType::ImportedObj && obj.importedModel) {
+                const BoundingBox& nb = obj.importedModel->normalizedLocalBox;
+                dimX *= std::max(0.01f, nb.max.x - nb.min.x);
+                dimY *= std::max(0.01f, nb.max.y - nb.min.y);
+                dimZ *= std::max(0.01f, nb.max.z - nb.min.z);
+            }
+            const std::string labelText = obj.displayLabel();
+            char tag[128];
             if (obj.groupId >= 0) {
                 std::snprintf(tag, sizeof(tag),
                               showLockedTag ? "%s #%u [GRP %d // LOCKED] (%.0fx%.0fx%.0f cm)"
                                             : "%s #%u [GRP %d] (%.0fx%.0fx%.0f cm)",
-                              primitiveName(obj.type), obj.id, obj.groupId,
-                              obj.transform.scale.x * kCmPerWorldUnit,
-                              obj.transform.scale.y * kCmPerWorldUnit,
-                              obj.transform.scale.z * kCmPerWorldUnit);
+                              labelText.c_str(), obj.id, obj.groupId, dimX, dimY, dimZ);
             } else {
                 std::snprintf(tag, sizeof(tag),
                               showLockedTag ? "%s #%u [LOCKED] (%.0fx%.0fx%.0f cm)"
                                             : "%s #%u (%.0fx%.0fx%.0f cm)",
-                              primitiveName(obj.type), obj.id,
-                              obj.transform.scale.x * kCmPerWorldUnit,
-                              obj.transform.scale.y * kCmPerWorldUnit,
-                              obj.transform.scale.z * kCmPerWorldUnit);
+                              labelText.c_str(), obj.id, dimX, dimY, dimZ);
             }
             int offsetPx = 38;
             if (isActiveDeleteTarget) offsetPx = 58;
@@ -1400,6 +1579,27 @@ private:
             DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 28, fontSize, WHITE);
         }
 
+        // 2b. Import / Export Confirmation Toast Banner
+        if (toastTimer_ > 0.0f && !toastMessage_.empty()) {
+            const float alpha = std::clamp(toastTimer_ / 0.6f, 0.0f, 1.0f);
+            const unsigned char aBg = static_cast<unsigned char>(230.0f * alpha);
+            const unsigned char aFg = static_cast<unsigned char>(255.0f * alpha);
+            const int tFont = 17;
+            const int tW = MeasureText(toastMessage_.c_str(), tFont);
+            const int bW = std::max(320, tW + 40);
+            const int bX = (sw - bW) / 2;
+            const int bY = showDeleteBar ? 78 : 70;
+            const Rectangle toastRect{
+                static_cast<float>(bX), static_cast<float>(bY), static_cast<float>(bW), 34.0f
+            };
+            const Color fillC = toastIsError_ ? Color{65, 16, 22, aBg} : Color{14, 52, 34, aBg};
+            const Color lineC = toastIsError_ ? Color{255, 75, 85, aFg} : Color{60, 245, 145, aFg};
+            const Color textC = toastIsError_ ? Color{255, 200, 205, aFg} : Color{210, 255, 230, aFg};
+            DrawRectangleRounded(toastRect, 0.5f, 12, fillC);
+            DrawRectangleRoundedLinesEx(toastRect, 0.5f, 12, 2.0f, lineC);
+            DrawText(toastMessage_.c_str(), (sw - tW) / 2, bY + 9, tFont, textC);
+        }
+
         // 3. Top-Left Mode + Clutch Telemetry Card
         DrawRectangle(18, 18, 330, 152, Color{14, 20, 30, 220});
         DrawRectangleLines(18, 18, 330, 152, Color{55, 195, 235, 200});
@@ -1441,7 +1641,16 @@ private:
         std::snprintf(buf, sizeof(buf), "OBJECTS  : %zu (1.0 unit = 10.0 cm)", objects_.size());
         DrawText(buf, 28, 148, 14, SKYBLUE);
 
-        // 4. Bottom-Left Left-Hand Mode Bar (0..5 fingers + Thumbs-Up/Down)
+        // 4. Compact Shortcut Legend + Bottom-Left Left-Hand Mode Bar (0..7)
+        const char* shortcutLegend =
+            "[TAB] AR/3D View  |  [I] Import .OBJ  |  [E] Export Group .OBJ  |  [S] Export Scene .OBJ";
+        const int legFont = 13;
+        const int legW = MeasureText(shortcutLegend, legFont) + 20;
+        const int legY = sh - 98;
+        DrawRectangle(18, legY, legW, 24, Color{14, 20, 30, 215});
+        DrawRectangleLines(18, legY, legW, 24, Color{55, 195, 235, 180});
+        DrawText(shortcutLegend, 28, legY + 5, legFont, Color{190, 240, 255, 245});
+
         const char* modeLabels[8] = {
             "0:IDLE", "1:MOVE", "2:RESIZE", "3:ROTATE",
             "4:COLOR", "5:GROUP", "TU:SPAWN", "TD:DEL"

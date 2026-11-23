@@ -1,4 +1,6 @@
 file(REMOVE_RECURSE
+  "CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj"
+  "CMakeFiles/visual3d_engine.dir/cpp_engine/src/FileDialog.cpp.obj.d"
   "CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj"
   "CMakeFiles/visual3d_engine.dir/cpp_engine/src/main.cpp.obj.d"
   "libvisual3d_engine.dll.a"
