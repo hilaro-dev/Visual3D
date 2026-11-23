@@ -1,0 +1,4 @@
+# Visual3D :: Python Hand-Tracking Vision Backend (Process 1)
+opencv-python>=4.8
+mediapipe>=0.10.9
+numpy>=1.24

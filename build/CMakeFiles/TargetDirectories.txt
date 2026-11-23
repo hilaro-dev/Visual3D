@@ -1,0 +1,3 @@
+C:/Users/Zeynep/Desktop/projects/Visual3D/build/CMakeFiles/visual3d_engine.dir
+C:/Users/Zeynep/Desktop/projects/Visual3D/build/CMakeFiles/edit_cache.dir
+C:/Users/Zeynep/Desktop/projects/Visual3D/build/CMakeFiles/rebuild_cache.dir

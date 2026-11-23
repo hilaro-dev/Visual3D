@@ -1,0 +1,5 @@
+# Visual3D :: Vision Engine (Process 1)
+# Python 3.9 - 3.12 recommended (MediaPipe wheel availability).
+opencv-python>=4.8
+mediapipe>=0.10.9
+numpy>=1.24
