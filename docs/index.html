@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Visual3D — Spatial Gesture CAD</title>
-  <link rel="icon" type="image/png" href="favicon.png" />
-  <link rel="apple-touch-icon" href="favicon.png" />
+  <title>Visual3D // Mode + Clutch 3D Studio &amp; AR Modeler (Web Port)</title>
   <link rel="stylesheet" href="./style.css" />
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs"
       }
     }
   </script>
@@ -25,6 +24,21 @@
 
     <!-- 2D Screen-Space HUD Overlay Canvas (Reticles, Delete Progress Rings, Floating Object Pills) -->
     <canvas id="hud-2d-canvas"></canvas>
+
+    <!-- Camera & MediaPipe Status / Error Overlay -->
+    <div id="camera-status-overlay" class="cam-overlay">
+      <div id="camera-status-card" class="cam-card">
+        <div id="cam-overlay-badge" class="cam-badge">CAMERA &amp; VISION INIT</div>
+        <div id="cam-overlay-title" class="cam-title">Starting Webcam &amp; MediaPipe...</div>
+        <div id="cam-overlay-detail" class="cam-detail">
+          Requesting 640&times;480 user-facing camera stream and loading HandLandmarker model.
+        </div>
+        <div class="cam-actions">
+          <button type="button" id="retry-camera-btn" class="cam-retry-btn">RETRY CAMERA</button>
+          <button type="button" id="dismiss-camera-btn" class="cam-dismiss-btn hidden">CONTINUE WITHOUT CAMERA</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Drag-and-Drop Overlay -->
     <div id="drop-overlay" class="hidden">
@@ -168,13 +182,15 @@
     <div id="pip-container">
       <div class="pip-header">
         <span>CAM PiP // 2D HAND SKELETON</span>
-        <button type="button" id="cam-toggle-btn" class="pip-cam-btn" title="Retry / Toggle Webcam">CAM</button>
+        <button type="button" id="cam-toggle-btn" class="pip-cam-btn" title="Retry / Reconnect Webcam">RETRY CAM</button>
       </div>
-      <canvas id="pip-canvas" width="320" height="240"></canvas>
+      <div class="pip-Stage">
+        <video id="webcam-video" autoplay playsinline muted width="640" height="480"></video>
+        <canvas id="pip-canvas" width="320" height="240"></canvas>
+      </div>
     </div>
 
-    <!-- Hidden Webcam Video & File Pickers -->
-    <video id="webcam-video" playsinline muted></video>
+    <!-- File Pickers -->
     <input type="file" id="file-input-obj" accept=".obj" class="hidden" />
     <input type="file" id="file-input-proj" accept=".3dmproj" class="hidden" />
   </div>
