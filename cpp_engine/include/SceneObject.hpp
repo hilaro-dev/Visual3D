@@ -50,7 +50,7 @@ inline const char* primitiveName(PrimitiveType t) {
         case PrimitiveType::Cube: return "CUBE";
         case PrimitiveType::Capsule: return "CAPSULE";
         case PrimitiveType::Cylinder: return "CYLINDER";
-        case PrimitiveType::Torus: return "TORUS";
+        case PrimitiveType::Torus: return "RING";
         default: return "OBJECT";
     }
 }

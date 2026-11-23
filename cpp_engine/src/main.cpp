@@ -70,7 +70,9 @@ inline const char* modeName(proto::LeftMode m) {
         case proto::LeftMode::Resize: return "RESIZE";
         case proto::LeftMode::Rotate: return "ROTATE";
         case proto::LeftMode::Recolor: return "RECOLOR";
-        case proto::LeftMode::SpawnGroup: return "SPAWN/GROUP";
+        case proto::LeftMode::Group: return "GROUP";
+        case proto::LeftMode::Spawn: return "SPAWN";
+        case proto::LeftMode::Delete: return "DELETE";
         default: return "IDLE";
     }
 }
@@ -89,6 +91,16 @@ inline const char* axisFingerName(proto::RightAxis a) {
         case proto::RightAxis::X: return "Thumb+Index";
         case proto::RightAxis::Y: return "Thumb+Middle";
         case proto::RightAxis::Z: return "Thumb+Ring";
+        default: return "Thumb+Index";
+    }
+}
+
+inline const char* spawnFingerName(PrimitiveType t) {
+    switch (t) {
+        case PrimitiveType::Cube: return "Thumb+Index";
+        case PrimitiveType::Capsule: return "Thumb+Middle";
+        case PrimitiveType::Cylinder: return "Thumb+Ring";
+        case PrimitiveType::Torus: return "Thumb+Pinky";
         default: return "Thumb+Index";
     }
 }
@@ -152,7 +164,9 @@ public:
             selectedIdx_ = 0;
             objects_[0].isSelected = true;
         }
-        measurementBadge_ = "IDLE [SAFE] // 1:MOVE  2:RESIZE  3:ROTATE  4:RECOLOR  5:SPAWN/GROUP";
+        deleteHoldTimer_ = 0.0f;
+        deleteCooldownTimer_ = 0.0f;
+        measurementBadge_ = "IDLE [SAFE] // 1:MOVE 2:SIZE 3:ROT 4:CLR 5:GRP TU:SPAWN TD:DEL";
         statusLine_ = "TAB: Toggle AR/Studio View | G: Group Selected | E: Export .OBJ | 1-4: Shape";
     }
 
@@ -227,6 +241,8 @@ public:
         if (IsKeyPressed(KEY_C)) {
             objects_.clear();
             selectedIdx_ = -1;
+            deleteHoldTimer_ = 0.0f;
+            deleteCooldownTimer_ = 0.0f;
             statusLine_ = "SCENE CLEARED";
         }
         if (IsKeyPressed(KEY_R)) {
@@ -284,6 +300,7 @@ public:
                 rightAxis_ = static_cast<proto::RightAxis>(pkt.right_axis);
             }
             isPinching_ = (pkt.is_pinching != 0);
+            spawnTriggerFromPkt_ = ((pkt.flags & 0x02) != 0);
             pinchPx_ = pkt.pinch_px;
             if (pkt.active_shape < 4) {
                 activeShape_ = static_cast<PrimitiveType>(pkt.active_shape);
@@ -310,12 +327,13 @@ public:
             }
         } else {
             isPinching_ = false;
+            spawnTriggerFromPkt_ = false;
             hands_[0].present = 0;
             hands_[1].present = 0;
         }
 
         // 3. Execute "Mode + Clutch" Anchor & Snapped Delta State Machine
-        runModeClutchStateMachine();
+        runModeClutchStateMachine(dt);
     }
 
     void render(const Camera3D& cam) {
@@ -377,9 +395,15 @@ private:
     uint8_t activeRecolorMask_ = 0;
     std::string activeColorName_ = "CYAN";
 
+    static constexpr float kDeleteHoldDurationSec = 1.50f;
+    static constexpr float kDeleteCooldownDurationSec = 1.00f;
+
     bool isPinching_ = false;
     bool wasPinching_ = false;
+    bool spawnTriggerFromPkt_ = false;
     float pinchPx_ = 999.f;
+    float deleteHoldTimer_ = 0.0f;
+    float deleteCooldownTimer_ = 0.0f;
     float currentPalmSize_ = 0.18f;
     float anchorPalmSize_ = 0.18f;
     Vector3 cursor3D_{0.0f, 0.5f, 0.0f};
@@ -431,74 +455,57 @@ private:
     }
 
     // --- Core "Mode + Clutch" Anchor & Snapped Delta State Machine ---------
-    void runModeClutchStateMachine() {
+    void runModeClutchStateMachine(float dt) {
+        if (deleteCooldownTimer_ > 0.0f) {
+            deleteCooldownTimer_ = std::max(0.0f, deleteCooldownTimer_ - dt);
+        }
+
         for (auto& o : objects_) o.isHovered = false;
         const int hovIdx = findHoveredObject(cursor3D_);
         if (hovIdx >= 0) objects_[hovIdx].isHovered = true;
 
-        const bool risingEdge = isPinching_ && !wasPinching_;
+        const bool wasNotPinching = !wasPinching_;
+        const bool risingEdge = isPinching_ && wasNotPinching;
         const bool fallingEdge = !isPinching_ && wasPinching_;
+        const bool spawnTrigger =
+            (leftMode_ == proto::LeftMode::Spawn) &&
+            (risingEdge || (spawnTriggerFromPkt_ && wasNotPinching));
         wasPinching_ = isPinching_;
 
         const char* axStr = axisName(rightAxis_);
 
-        // 1. Rising Edge of Pinch Clutch: Record `anchorHandPos_`, `anchorPalmSize_` & `anchorTransform`
-        if (risingEdge) {
+        // 1. Single-Shot Rising-Edge Spawn OR Anchor Snapshot on Pinch Clutch
+        if (spawnTrigger) {
+            for (auto& o : objects_) o.isSelected = false;
+            SceneObject& created = spawnObject(activeShape_, cursor3D_, activeColor_);
+            created.isSelected = true;
+            selectedIdx_ = static_cast<int>(objects_.size()) - 1;
+            spawnTriggerFromPkt_ = false;
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                          "SPAWNED [%s] @ (%.0f, %.0f, %.0f) cm // RELEASE (>48px) FOR NEXT",
+                          primitiveName(activeShape_),
+                          created.transform.position.x * kCmPerWorldUnit,
+                          created.transform.position.y * kCmPerWorldUnit,
+                          created.transform.position.z * kCmPerWorldUnit);
+            measurementBadge_ = buf;
+        } else if (risingEdge) {
             anchorHandPos_ = cursor3D_;
             anchorPalmSize_ = currentPalmSize_;
 
-            if (leftMode_ == proto::LeftMode::SpawnGroup) {
-                if (hovIdx >= 0) {
-                    // Pinching an existing object in SPAWN/GROUP mode toggles its selection
-                    // and assigns a shared `groupId` to all selected objects.
-                    objects_[hovIdx].isSelected = !objects_[hovIdx].isSelected;
-                    selectedIdx_ = hovIdx;
-                    int selCount = 0;
-                    for (const auto& o : objects_) {
-                        if (o.isSelected) ++selCount;
-                    }
-                    if (selCount >= 2) {
-                        const int gid = nextGroupId_++;
-                        for (auto& o : objects_) {
-                            if (o.isSelected) o.groupId = gid;
-                        }
-                        char buf[128];
-                        std::snprintf(buf, sizeof(buf), "GROUPED %d OBJECTS [GROUP #%d]", selCount, gid);
-                        measurementBadge_ = buf;
-                    } else {
-                        char buf[128];
-                        std::snprintf(buf, sizeof(buf), "SELECTED %s #%u FOR GROUPING",
-                                      primitiveName(objects_[hovIdx].type), objects_[hovIdx].id);
-                        measurementBadge_ = buf;
-                    }
-                } else {
-                    // Confirming pinch in empty space converts the Ghost Preview into a permanent SceneObject
-                    for (auto& o : objects_) o.isSelected = false;
-                    SceneObject& created = spawnObject(activeShape_, cursor3D_, activeColor_);
-                    created.isSelected = true;
-                    selectedIdx_ = static_cast<int>(objects_.size()) - 1;
-                    char buf[128];
-                    std::snprintf(buf, sizeof(buf), "SPAWNED %s AT (%.0f, %.0f, %.0f) cm",
-                                  primitiveName(activeShape_),
-                                  created.transform.position.x * kCmPerWorldUnit,
-                                  created.transform.position.y * kCmPerWorldUnit,
-                                  created.transform.position.z * kCmPerWorldUnit);
-                    measurementBadge_ = buf;
-                }
-            } else {
-                // Select hovered object if pinching near one
-                if (hovIdx >= 0) {
-                    selectedIdx_ = hovIdx;
-                    if (objects_[hovIdx].groupId < 0) {
-                        for (size_t i = 0; i < objects_.size(); ++i) {
-                            objects_[i].isSelected = (static_cast<int>(i) == selectedIdx_);
-                        }
+            // Select hovered object if pinching near one
+            if (hovIdx >= 0) {
+                if (hovIdx != selectedIdx_) deleteHoldTimer_ = 0.0f;
+                selectedIdx_ = hovIdx;
+                if (objects_[hovIdx].groupId < 0) {
+                    for (size_t i = 0; i < objects_.size(); ++i) {
+                        objects_[i].isSelected = (static_cast<int>(i) == selectedIdx_);
                     }
                 }
-                // Snapshot every object's `anchorTransform` at pinch engagement
-                for (auto& o : objects_) {
-                    o.anchorTransform = o.transform;
-                }
+            }
+            // Snapshot every object's `anchorTransform` at pinch engagement
+            for (auto& o : objects_) {
+                o.anchorTransform = o.transform;
             }
         }
 
@@ -606,7 +613,9 @@ private:
                     measurementBadge_ = badge;
                     break;
                 }
-                case proto::LeftMode::SpawnGroup:
+                case proto::LeftMode::Group:
+                case proto::LeftMode::Spawn:
+                case proto::LeftMode::Delete:
                 default:
                     break;
             }
@@ -619,9 +628,54 @@ private:
             }
         }
 
-        // 4. Hover / Locked Color Readout when Clutch is Released
-        if (!isPinching_) {
-            char badge[128];
+        // 3b. Safe Timed Deletion (1.5s Thumbs-Down Hold + 1.0s Cooldown)
+        if (leftMode_ == proto::LeftMode::Delete) {
+            if (deleteCooldownTimer_ > 0.0f) {
+                deleteHoldTimer_ = 0.0f;
+            } else if (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size())) {
+                deleteHoldTimer_ += dt;
+                if (deleteHoldTimer_ >= kDeleteHoldDurationSec) {
+                    const uint32_t deletedId = objects_[selectedIdx_].id;
+                    const PrimitiveType deletedType = objects_[selectedIdx_].type;
+                    objects_.erase(objects_.begin() + selectedIdx_);
+                    deleteHoldTimer_ = 0.0f;
+                    deleteCooldownTimer_ = kDeleteCooldownDurationSec;
+
+                    for (auto& o : objects_) o.isSelected = false;
+                    if (objects_.empty()) {
+                        selectedIdx_ = -1;
+                    } else {
+                        selectedIdx_ = std::min(selectedIdx_, static_cast<int>(objects_.size()) - 1);
+                        objects_[selectedIdx_].isSelected = true;
+                    }
+
+                    char delMsg[128];
+                    std::snprintf(delMsg, sizeof(delMsg), "DELETED [%s #%u] // COOLDOWN 1.0s",
+                                  primitiveName(deletedType), deletedId);
+                    statusLine_ = delMsg;
+                }
+            } else {
+                deleteHoldTimer_ = 0.0f;
+            }
+        } else {
+            deleteHoldTimer_ = 0.0f;
+        }
+
+        // 4. Mode / Hover / Locked Color / Delete HUD Readout
+        char badge[160];
+        if (leftMode_ == proto::LeftMode::Delete) {
+            if (deleteCooldownTimer_ > 0.0f) {
+                std::snprintf(badge, sizeof(badge), "DELETE COOLDOWN (%.1fs)", deleteCooldownTimer_);
+            } else if (selectedIdx_ >= 0 && selectedIdx_ < static_cast<int>(objects_.size())) {
+                std::snprintf(badge, sizeof(badge), "DELETING OBJECT... %.1fs", deleteHoldTimer_);
+            } else {
+                std::snprintf(badge, sizeof(badge), "DELETE [NO OBJECT SELECTED]");
+            }
+            measurementBadge_ = badge;
+        } else if (leftMode_ == proto::LeftMode::Group) {
+            std::snprintf(badge, sizeof(badge), "GROUP MODE [5F OPEN PALM] // PLACEHOLDER");
+            measurementBadge_ = badge;
+        } else if (!isPinching_) {
             if (leftMode_ == proto::LeftMode::Idle) {
                 std::snprintf(badge, sizeof(badge), "IDLE [SAFE // LOCKED]  |  AXIS: %s", axStr);
             } else if (leftMode_ == proto::LeftMode::Recolor) {
@@ -629,13 +683,10 @@ private:
                 std::snprintf(badge, sizeof(badge), "RECOLOR [LOCKED]: %s (%u, %u, %u)",
                               activeColorName_.c_str(), activeColor_.r, activeColor_.g,
                               activeColor_.b);
-            } else if (leftMode_ == proto::LeftMode::SpawnGroup) {
+            } else if (leftMode_ == proto::LeftMode::Spawn) {
                 std::snprintf(badge, sizeof(badge),
-                              "SPAWN / GROUP [%s] @ (%.0f, %.0f, %.0f) cm // PINCH TO CONFIRM",
-                              primitiveName(activeShape_),
-                              snapToStep(cursor3D_.x, kSnapMoveStepUnits) * kCmPerWorldUnit,
-                              snapToStep(cursor3D_.y, kSnapMoveStepUnits) * kCmPerWorldUnit,
-                              snapToStep(cursor3D_.z, kSnapMoveStepUnits) * kCmPerWorldUnit);
+                              "SPAWN [%s] // Thumb+Index=Cube, Middle=Capsule, Ring=Cyl, Pinky=Ring",
+                              primitiveName(activeShape_));
             } else {
                 std::snprintf(badge, sizeof(badge), "%s [%s]: +0.0 %s (PINCH <32px TO ENGAGE)",
                               modeName(leftMode_), axStr,
@@ -718,8 +769,8 @@ private:
             }
         }
 
-        // 2. Ghost Preview in `SPAWN / GROUP` mode using `DrawModelWires()` + translucent core
-        if (leftMode_ == proto::LeftMode::SpawnGroup) {
+        // 2. Ghost Preview in `SPAWN` mode while `is_pinching == false`
+        if (leftMode_ == proto::LeftMode::Spawn && !isPinching_) {
             const Vector3 ghostPos{
                 snapToStep(cursor3D_.x, kSnapMoveStepUnits),
                 snapToStep(cursor3D_.y, kSnapMoveStepUnits),
@@ -823,6 +874,12 @@ private:
                                    active ? chCols[ch] : Fade(chCols[ch], 0.35f));
                         if (active) DrawCircleV(pts[tips[ch]], 7.5f, chCols[ch]);
                     }
+                } else if (leftMode_ == proto::LeftMode::Spawn) {
+                    const int shapeTips[4] = {8, 12, 16, 20};
+                    const int activeTip = shapeTips[static_cast<int>(activeShape_) % 4];
+                    const Color pCol = isPinching_ ? Color{255, 215, 50, 255} : Color{90, 245, 255, 220};
+                    DrawLineEx(pts[4], pts[activeTip], isPinching_ ? 3.5f : 2.2f, pCol);
+                    DrawCircleV(pts[activeTip], 6.5f, pCol);
                 } else {
                     int activeTip = 8;
                     if (rightAxis_ == proto::RightAxis::Y) activeTip = 12;
@@ -856,11 +913,33 @@ private:
 
     // --- Pill-Shaped Top-Center Measurement HUD & Telemetry Panels ----------
     void drawHudOverlays(const Camera3D& cam, int sw, int sh) const {
-        // 1. 3D Object Labels (Group ID & Dimensions in cm)
-        for (const auto& obj : objects_) {
+        // 1. 3D Object Labels & Circular Deletion Progress Ring
+        for (size_t i = 0; i < objects_.size(); ++i) {
+            const auto& obj = objects_[i];
             if (!obj.isSelected && !obj.isHovered && obj.groupId < 0) continue;
             const Vector2 sc = GetWorldToScreen(obj.transform.position, cam);
             if (sc.x < 0 || sc.x > sw || sc.y < 0 || sc.y > sh) continue;
+
+            const bool isActiveDeleteTarget =
+                (leftMode_ == proto::LeftMode::Delete && static_cast<int>(i) == selectedIdx_ &&
+                 (deleteHoldTimer_ > 0.0f || deleteCooldownTimer_ > 0.0f));
+            if (isActiveDeleteTarget) {
+                if (deleteCooldownTimer_ > 0.0f) {
+                    const float cdFrac =
+                        std::clamp(deleteCooldownTimer_ / kDeleteCooldownDurationSec, 0.0f, 1.0f);
+                    DrawRing(sc, 32.0f, 40.0f, -90.0f, -90.0f + 360.0f * cdFrac, 48,
+                             Color{255, 165, 50, 215});
+                } else {
+                    const float delFrac =
+                        std::clamp(deleteHoldTimer_ / kDeleteHoldDurationSec, 0.0f, 1.0f);
+                    DrawRing(sc, 32.0f, 42.0f, 0.0f, 360.0f, 48, Color{45, 10, 15, 195});
+                    DrawRing(sc, 32.0f, 42.0f, -90.0f, -90.0f + 360.0f * delFrac, 48,
+                             Color{255, 50, 65, 245});
+                    DrawRingLines(sc, 31.0f, 43.0f, -90.0f, -90.0f + 360.0f * delFrac, 48,
+                                  Color{255, 185, 185, 230});
+                }
+            }
+
             char tag[96];
             if (obj.groupId >= 0) {
                 std::snprintf(tag, sizeof(tag), "%s #%u [GRP %d] (%.0fx%.0fx%.0f cm)",
@@ -875,17 +954,23 @@ private:
                               obj.transform.scale.y * kCmPerWorldUnit,
                               obj.transform.scale.z * kCmPerWorldUnit);
             }
-            DrawText(tag, static_cast<int>(sc.x) - 65, static_cast<int>(sc.y) - 38, 14,
-                     obj.isSelected ? YELLOW : SKYBLUE);
+            const int labelY = static_cast<int>(sc.y) - (isActiveDeleteTarget ? 58 : 38);
+            DrawText(tag, static_cast<int>(sc.x) - 65, labelY, 14,
+                     isActiveDeleteTarget ? RED : (obj.isSelected ? YELLOW : SKYBLUE));
         }
 
-        // 2. Top-Center Pill-Shaped Measurement Badge (with RGB Swatch in RECOLOR mode)
+        // 2. Top-Center Pill-Shaped Measurement Badge (with RGB Swatch or Delete Progress Bar)
         const int fontSize = 20;
         const bool showSwatch = (leftMode_ == proto::LeftMode::Recolor);
+        const bool showDeleteBar = (leftMode_ == proto::LeftMode::Delete &&
+                                    deleteCooldownTimer_ <= 0.0f &&
+                                    deleteHoldTimer_ > 0.0f);
+        const bool showDeleteCooldown = (leftMode_ == proto::LeftMode::Delete &&
+                                         deleteCooldownTimer_ > 0.0f);
         const int swatchSpace = showSwatch ? 36 : 0;
         const int textW = MeasureText(measurementBadge_.c_str(), fontSize);
         const int pillW = std::max(380, textW + 48 + swatchSpace);
-        const int pillH = 44;
+        const int pillH = showDeleteBar ? 54 : 44;
         const int pillX = (sw - pillW) / 2;
         const Rectangle pillRect{
             static_cast<float>(pillX),
@@ -894,7 +979,9 @@ private:
             static_cast<float>(pillH),
         };
         const Color borderCol = showSwatch ? activeColor_
-                                           : (isPinching_ ? Color{255, 215, 65, 255} : axisColor(rightAxis_));
+            : (showDeleteBar ? Color{255, 60, 75, 255}
+            : (showDeleteCooldown ? Color{255, 165, 50, 255}
+            : (isPinching_ ? Color{255, 215, 65, 255} : axisColor(rightAxis_))));
         DrawRectangleRounded(pillRect, 0.5f, 16, Color{14, 22, 34, 235});
         DrawRectangleRoundedLinesEx(pillRect, 0.5f, 16, 2.5f, borderCol);
         if (showSwatch) {
@@ -903,6 +990,14 @@ private:
             const Rectangle swatch{static_cast<float>(textStartX + textW + 14), 24.0f, 26.0f, 26.0f};
             DrawRectangleRounded(swatch, 0.25f, 6, activeColor_);
             DrawRectangleRoundedLinesEx(swatch, 0.25f, 6, 1.5f, WHITE);
+        } else if (showDeleteBar) {
+            DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 22, fontSize, Color{255, 115, 125, 255});
+            const float delFrac = std::clamp(deleteHoldTimer_ / kDeleteHoldDurationSec, 0.0f, 1.0f);
+            const float trackW = static_cast<float>(pillW - 44);
+            const Rectangle track{static_cast<float>(pillX + 22), 54.0f, trackW, 6.0f};
+            const Rectangle fill{track.x, track.y, trackW * delFrac, track.height};
+            DrawRectangleRounded(track, 0.5f, 6, Color{60, 18, 22, 230});
+            DrawRectangleRounded(fill, 0.5f, 6, Color{255, 55, 68, 255});
         } else {
             DrawText(measurementBadge_.c_str(), (sw - textW) / 2, 28, fontSize, WHITE);
         }
@@ -921,9 +1016,15 @@ private:
         std::snprintf(buf, sizeof(buf), "L-MODE   : %s (150ms Debounced)", modeName(leftMode_));
         DrawText(buf, 28, 68, 14, Color{90, 245, 255, 255});
 
-        std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)", axisName(rightAxis_),
-                      axisFingerName(rightAxis_));
-        DrawText(buf, 28, 88, 14, axisColor(rightAxis_));
+        if (leftMode_ == proto::LeftMode::Spawn) {
+            std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)", primitiveName(activeShape_),
+                          spawnFingerName(activeShape_));
+            DrawText(buf, 28, 88, 14, Color{90, 245, 255, 255});
+        } else {
+            std::snprintf(buf, sizeof(buf), "R-HAND   : %s (%s)", axisName(rightAxis_),
+                          axisFingerName(rightAxis_));
+            DrawText(buf, 28, 88, 14, axisColor(rightAxis_));
+        }
 
         std::snprintf(buf, sizeof(buf), "CLUTCH   : %s (%.1f px | <32 / >46)",
                       isPinching_ ? "ENGAGED [PINCH]" : "RELEASED [HOVER]", pinchPx_);
@@ -937,19 +1038,20 @@ private:
         std::snprintf(buf, sizeof(buf), "OBJECTS  : %zu (1.0 unit = 10.0 cm)", objects_.size());
         DrawText(buf, 28, 148, 14, SKYBLUE);
 
-        // 4. Bottom-Left Left-Hand Mode Bar (0..5 fingers)
-        const char* modeLabels[6] = {
-            "0:IDLE", "1:MOVE", "2:RESIZE", "3:ROTATE", "4:RECOLOR", "5:SPAWN/GRP"
+        // 4. Bottom-Left Left-Hand Mode Bar (0..5 fingers + Thumbs-Up/Down)
+        const char* modeLabels[8] = {
+            "0:IDLE", "1:MOVE", "2:RESIZE", "3:ROTATE",
+            "4:COLOR", "5:GROUP", "TU:SPAWN", "TD:DEL"
         };
         const int barY = sh - 68;
-        for (int m = 0; m < 6; ++m) {
-            const int bx = 18 + m * 124;
+        for (int m = 0; m < 8; ++m) {
+            const int bx = 18 + m * 116;
             const bool active = (static_cast<int>(leftMode_) == m);
-            DrawRectangle(bx, barY, 118, 32,
-                          active ? Color{35, 135, 185, 235} : Color{16, 24, 36, 200});
-            DrawRectangleLines(bx, barY, 118, 32,
-                               active ? Color{120, 245, 255, 255} : Color{50, 95, 125, 180});
-            DrawText(modeLabels[m], bx + 10, barY + 9, 14, active ? WHITE : LIGHTGRAY);
+            const Color activeFill = (m == 7) ? Color{175, 35, 48, 235} : Color{35, 135, 185, 235};
+            const Color activeLine = (m == 7) ? Color{255, 95, 105, 255} : Color{120, 245, 255, 255};
+            DrawRectangle(bx, barY, 110, 32, active ? activeFill : Color{16, 24, 36, 200});
+            DrawRectangleLines(bx, barY, 110, 32, active ? activeLine : Color{50, 95, 125, 180});
+            DrawText(modeLabels[m], bx + 8, barY + 9, 13, active ? WHITE : LIGHTGRAY);
         }
         DrawText(statusLine_.c_str(), 20, sh - 26, 14, Color{150, 220, 245, 230});
     }

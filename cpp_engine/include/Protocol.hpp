@@ -38,7 +38,9 @@ enum class LeftMode : uint8_t {
     Resize = 2,
     Rotate = 3,
     Recolor = 4,
-    SpawnGroup = 5
+    Group = 5,
+    Spawn = 6,
+    Delete = 7
 };
 
 enum class RightAxis : uint8_t {
@@ -134,7 +136,7 @@ inline bool parseTelemetry(const uint8_t* data, size_t size, TelemetryPacket& ou
     std::memcpy(&out, data, sizeof(TelemetryPacket));
     if (out.version != kVersion) return false;
     if (!(out.camAspect > 0.2f && out.camAspect < 5.f)) out.camAspect = 4.f / 3.f;
-    if (out.left_mode > 5) out.left_mode = 0;
+    if (out.left_mode > 7) out.left_mode = 0;
     if (out.right_axis < 1 || out.right_axis > 3) out.right_axis = 1;
     out.hands[0].contactMask &= 0x07;
     out.hands[1].contactMask &= 0x07;  // Right Hand carries additive R/G/B pinch bitmask in RECOLOR mode

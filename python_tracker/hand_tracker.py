@@ -7,12 +7,14 @@ Zero-Conflict "Mode + Clutch" Gesture State Machine:
   1. Left Hand (Mode Selector with 150ms Debounce Timer):
      Counts extended Left Hand fingers (0..5) and requires a new finger count
      to remain stable for >= 150ms (`MODE_DEBOUNCE_SEC = 0.150`) before switching:
-       * 0 Fingers (Fist)      : IDLE    (0) -- Safe state, transformations locked
-       * 1 Finger              : MOVE    (1) -- Translate along locked axis
-       * 2 Fingers             : RESIZE  (2) -- Scale along locked axis / uniform
-       * 3 Fingers             : ROTATE  (3) -- Rotate around locked axis (15 deg snap)
-       * 4 Fingers             : RECOLOR (4) -- Additive RGB finger mix / palette
-       * 5 Fingers (Open Palm) : SPAWN / GROUP (5) -- Ghost preview & spawn / group
+       * 0 Fingers (Closed Fist) : IDLE    (0) -- Safe state, transformations locked
+       * 1 Finger                : MOVE    (1) -- Translate along locked axis
+       * 2 Fingers               : RESIZE  (2) -- Scale along locked axis / uniform
+       * 3 Fingers               : ROTATE  (3) -- Rotate around locked axis (15 deg snap)
+       * 4 Fingers (Thumb Tucked): RECOLOR (4) -- Additive RGB finger mix / palette
+       * 5 Fingers (Open Palm)   : GROUP   (5) -- Placeholder for multi-object grouping
+       * Thumbs-Up  (0+Thumb Up) : SPAWN   (6) -- Ghost preview & single-shot spawn
+       * Thumbs-Down(0+Thumb Dn) : DELETE  (7) -- Safe 1.5s hold delete + 1.0s cooldown
 
   2. Right Hand (Axis Selector & Hysteresis Pinch Clutch):
      * Axis Lock (Hover state, updated while not pinching):
@@ -78,6 +80,8 @@ PINCH_ENGAGE_PX: float = 32.0      # Engage Right Thumb+Finger pinch when < 32 p
 PINCH_RELEASE_PX: float = 46.0     # Release Right Thumb+Finger pinch when > 46 px
 RECOLOR_ENGAGE_PX: float = 38.0    # Engage additive RGB channel when < 38 px
 RECOLOR_RELEASE_PX: float = 48.0   # Release additive RGB channel when > 48 px
+SPAWN_ENGAGE_PX: float = 32.0      # Single-shot spawn trigger when < 32 px
+SPAWN_RELEASE_PX: float = 48.0     # Release spawn clutch when > 48 px
 CHROMA_DISTANCE: float = 0.048     # Normalized proximity for Left-Hand RECOLOR channels
 
 # Left Hand Mode Enum (matches Protocol.hpp :: LeftMode)
@@ -86,8 +90,10 @@ MODE_MOVE = 1
 MODE_RESIZE = 2
 MODE_ROTATE = 3
 MODE_RECOLOR = 4
-MODE_SPAWN_GROUP = 5
-MODE_NAMES = ["IDLE", "MOVE", "RESIZE", "ROTATE", "RECOLOR", "SPAWN/GROUP"]
+MODE_GROUP = 5
+MODE_SPAWN = 6
+MODE_DELETE = 7
+MODE_NAMES = ["IDLE", "MOVE", "RESIZE", "ROTATE", "RECOLOR", "GROUP", "SPAWN", "DELETE"]
 
 # Right Hand Axis Enum (matches Protocol.hpp :: RightAxis)
 AXIS_NONE = 0
@@ -125,6 +131,7 @@ MAX_DATAGRAM = 8192
 assert HEADER_SIZE == 56 and HAND_SIZE == 284 and PACKET_SIZE == 624
 
 FLAG_MIRRORED = 0x01
+FLAG_SPAWN_TRIGGER = 0x02
 S_PINCH, S_FIST, S_OPEN, S_THUMB_FOLDED = 0x01, 0x02, 0x04, 0x08
 
 # Landmark indices
@@ -318,7 +325,7 @@ class HandFeatures:
     pinch_dist: float = 1.0     # Normalized distance
     pinch_px: float = 999.0     # Pixel distance on 640x480 frame
     hand_scale: float = 0.0
-    thumb_tip_dists_px: Tuple[float, float, float] = (999.0, 999.0, 999.0)  # (Index, Middle, Ring) px
+    thumb_tip_dists_px: Tuple[float, float, float, float] = (999.0, 999.0, 999.0, 999.0)  # (Index, Middle, Ring, Pinky) px
     color: Tuple[float, float, float] = (0.15, 0.90, 1.00)
 
 
@@ -346,7 +353,9 @@ class ModeClutchEngine:
         self.right_axis: int = AXIS_X
         self.is_pinching: bool = False
         self.recolor_latched: List[bool] = [False, False, False]  # [Index(R), Middle(G), Ring(B)]
+        self.spawn_shape: int = 0
         self.active_shape: int = 0
+        self.spawn_trigger: bool = False
         self.smoothed_palm_size: float = 0.18
         self.cursor_3d: Tuple[float, float, float] = (0.0, 0.0, 0.18)
         self.last_color: Tuple[float, float, float] = (0.15, 0.90, 1.00)
@@ -394,11 +403,12 @@ class ModeClutchEngine:
 
         if slot == 1:
             # Direct Finger-to-Thumb 2D pixel distances on Right Hand:
-            #   Index(8) -> X-AXIS, Middle(12) -> Y-AXIS, Ring(16) -> Z-AXIS
+            #   Index(8), Middle(12), Ring(16), Pinky(20) vs Thumb Tip(4)
             d_idx = dist_px(THUMB_TIP, INDEX_TIP)
             d_mid = dist_px(THUMB_TIP, MIDDLE_TIP)
             d_rng = dist_px(THUMB_TIP, RING_TIP)
-            f.thumb_tip_dists_px = (d_idx, d_mid, d_rng)
+            d_pnk = dist_px(THUMB_TIP, PINKY_TIP)
+            f.thumb_tip_dists_px = (d_idx, d_mid, d_rng, d_pnk)
             f.pinch_px = min(d_idx, d_mid, d_rng)
             f.pinch_dist = f.pinch_px / max(self.frame_w, 1.0)
         else:
@@ -421,32 +431,44 @@ class ModeClutchEngine:
                now: float) -> Tuple[Optional[HandFeatures], Optional[HandFeatures]]:
         left_f: Optional[HandFeatures] = None
         right_f: Optional[HandFeatures] = None
+        self.spawn_trigger = False
 
-        # --- 1. Left Hand: 150ms Debounced Mode Selector (0..5 fingers) ---
+        # --- 1. Left Hand: 150ms Debounced Mode Selector (0..7) ---
         if left_lm is not None:
             left_f = self._analyze_single_hand(0, left_lm)
-            raw_count = int(np.clip(left_f.finger_count, 0, 5))
-            # If 4 non-thumb fingers are extended and thumb is folded, treat as 4 (RECOLOR);
-            # if all 5 are extended, treat as 5 (SPAWN/GROUP); if 1..3 non-thumb extended, use non-thumb count.
             non_thumb = bin(left_f.fingers_mask >> 1).count("1")
-            if left_f.fist or (non_thumb == 0 and not (left_f.fingers_mask & 1)):
-                candidate_mode = MODE_IDLE
+            if non_thumb == 0:
+                dx = float(left_lm[THUMB_TIP, 0] - left_lm[INDEX_MCP, 0])
+                dy = float(left_lm[THUMB_TIP, 1] - left_lm[INDEX_MCP, 1])
+                thumb_away = (dx * dx + dy * dy) ** 0.5
+                thumb_tip_y = float(left_lm[THUMB_TIP, 1])
+                thumb_ip_y = float(left_lm[THUMB_IP, 1])
+                wrist_y = float(left_lm[WRIST, 1])
+                thumb_extended_away = thumb_away > (0.75 * left_f.hand_scale)
+                if thumb_extended_away and (thumb_tip_y < thumb_ip_y - 0.03) and (thumb_tip_y < wrist_y - 0.05):
+                    candidate_mode = MODE_SPAWN
+                    left_f.fist = False
+                elif thumb_extended_away and (thumb_tip_y > thumb_ip_y + 0.03) and (thumb_tip_y > wrist_y + 0.05):
+                    candidate_mode = MODE_DELETE
+                    left_f.fist = False
+                else:
+                    candidate_mode = MODE_IDLE
             elif non_thumb == 4 and (left_f.fingers_mask & 1):
-                candidate_mode = MODE_SPAWN_GROUP
+                candidate_mode = MODE_GROUP
             elif non_thumb == 4:
                 candidate_mode = MODE_RECOLOR
             else:
-                candidate_mode = int(np.clip(non_thumb, 0, 4))
+                candidate_mode = int(np.clip(non_thumb, 1, 3))
             self.left_mode = self.left_mode_debouncer.update(candidate_mode, now)
             left_f.gesture = self.left_mode
         else:
             # Safe fallback when Left Hand leaves frame: lock to IDLE after 150ms
             self.left_mode = self.left_mode_debouncer.update(MODE_IDLE, now)
 
-        # --- 2. Right Hand: Single-Axis Pinch Clutch OR Multi-Finger RECOLOR Mixing ---
+        # --- 2. Right Hand: Single-Axis Pinch Clutch, RECOLOR RGB, or 4-Finger SPAWN Picker ---
         if right_lm is not None:
             right_f = self._analyze_single_hand(1, right_lm)
-            dist_index, dist_middle, dist_ring = right_f.thumb_tip_dists_px
+            dist_index, dist_middle, dist_ring, dist_pinky = right_f.thumb_tip_dists_px
             axis_dists = (
                 (AXIS_X, dist_index),
                 (AXIS_Y, dist_middle),
@@ -483,8 +505,35 @@ class ModeClutchEngine:
                 right_f.color = self.last_color
                 if left_f is not None:
                     left_f.color = self.last_color
+            elif self.left_mode == MODE_SPAWN:
+                # SPAWN MODE (Left Hand Thumbs-Up): 4-finger Shape Picker + Single-Shot Rising Edge
+                # Index=0 (CUBE), Middle=1 (CAPSULE), Ring=2 (CYLINDER), Pinky=3 (RING/TORUS)
+                shape_dists = (
+                    (0, dist_index),
+                    (1, dist_middle),
+                    (2, dist_ring),
+                    (3, dist_pinky),
+                )
+                if not self.is_pinching:
+                    closest_shape, min_dist = min(shape_dists, key=lambda item: item[1])
+                    self.spawn_shape = closest_shape
+                    self.active_shape = closest_shape
+                    right_f.pinch_px = min_dist
+                    if min_dist < SPAWN_ENGAGE_PX:
+                        self.is_pinching = True
+                        self.spawn_trigger = True  # Single-frame rising-edge event
+                else:
+                    locked_dist = (dist_index, dist_middle, dist_ring, dist_pinky)[self.active_shape]
+                    right_f.pinch_px = locked_dist
+                    self.spawn_trigger = False
+                    if locked_dist > SPAWN_RELEASE_PX:
+                        self.is_pinching = False
+                        closest_shape, min_dist = min(shape_dists, key=lambda item: item[1])
+                        self.spawn_shape = closest_shape
+                        self.active_shape = closest_shape
+                        right_f.pinch_px = min_dist
             else:
-                # MOVE / RESIZE / ROTATE / SPAWN: Single-finger pinch axis & clutch
+                # MOVE / RESIZE / ROTATE / IDLE: Single-finger pinch axis & clutch
                 closest_axis, min_dist = min(axis_dists, key=lambda item: item[1])
                 if not self.is_pinching:
                     self.right_axis = closest_axis
@@ -499,9 +548,6 @@ class ModeClutchEngine:
                     else:
                         locked_dist = dist_ring
 
-                    # Allow seamless handoff if another finger pinches much deeper (< 32px
-                    # and > 6px closer than the currently latched finger) so Thumb+Ring
-                    # or Thumb+Middle cannot get trapped on Thumb+Index while crossing over.
                     if (
                         closest_axis != self.right_axis
                         and min_dist < self.engage_px
@@ -519,8 +565,10 @@ class ModeClutchEngine:
             right_f.pinch = self.is_pinching
             right_f.gesture = self.right_axis
 
-            # 3D Cursor X/Y from midpoint between Right Thumb Tip (4) and active axis fingertip
-            if self.right_axis == AXIS_X:
+            # 3D Cursor X/Y from midpoint between Right Thumb Tip (4) and active fingertip
+            if self.left_mode == MODE_SPAWN:
+                active_tip = (INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP)[self.active_shape]
+            elif self.right_axis == AXIS_X:
                 active_tip = INDEX_TIP
             elif self.right_axis == AXIS_Y:
                 active_tip = MIDDLE_TIP
@@ -757,6 +805,7 @@ def main() -> int:
             pinch_px = right_f.pinch_px if right_f is not None else 999.0
             cx, cy, cz = engine.cursor_3d
 
+            pkt_flags = flags | (FLAG_SPAWN_TRIGGER if engine.spawn_trigger else 0)
             header = struct.pack(
                 HEADER_FMT,
                 TELEMETRY_MAGIC,
@@ -766,7 +815,7 @@ def main() -> int:
                 fps,
                 aspect,
                 num_hands,
-                flags,
+                pkt_flags,
                 engine.left_mode,
                 engine.right_axis,
                 1 if engine.is_pinching else 0,
