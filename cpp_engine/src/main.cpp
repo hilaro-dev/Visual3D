@@ -83,6 +83,7 @@ inline const char* axisName(proto::RightAxis a) {
         case proto::RightAxis::X: return "X-AXIS";
         case proto::RightAxis::Y: return "Y-AXIS";
         case proto::RightAxis::Z: return "Z-AXIS";
+        case proto::RightAxis::XYZ: return "XYZ-ALL";
         default: return "X-AXIS";
     }
 }
@@ -92,6 +93,7 @@ inline const char* axisFingerName(proto::RightAxis a) {
         case proto::RightAxis::X: return "Thumb+Index";
         case proto::RightAxis::Y: return "Thumb+Middle";
         case proto::RightAxis::Z: return "Thumb+Ring";
+        case proto::RightAxis::XYZ: return "Thumb+Pinky";
         default: return "Thumb+Index";
     }
 }
@@ -101,6 +103,7 @@ inline const char* axisFingerShort(proto::RightAxis a) {
         case proto::RightAxis::X: return "Index";
         case proto::RightAxis::Y: return "Middle";
         case proto::RightAxis::Z: return "Ring";
+        case proto::RightAxis::XYZ: return "Pinky";
         default: return "Index";
     }
 }
@@ -160,6 +163,7 @@ inline Color axisColor(proto::RightAxis a) {
         case proto::RightAxis::X: return Color{255, 75, 85, 255};   // Red X
         case proto::RightAxis::Y: return Color{75, 245, 115, 255};  // Green Y
         case proto::RightAxis::Z: return Color{75, 165, 255, 255};  // Blue Z
+        case proto::RightAxis::XYZ: return Color{210, 115, 255, 255};  // Violet XYZ
         default: return Color{80, 225, 255, 255};
     }
 }
@@ -1053,73 +1057,128 @@ private:
                     break;
                 }
                 case proto::LeftMode::Move: {
-                    // X/Y snap to 0.5 world units (5.0 cm); Z snaps to 1.0 cm from apparent palm scale
-                    const float snappedCm = (rightAxis_ == proto::RightAxis::Z)
-                                                ? snapToStep(rawZDeltaCm, kSnapMoveStepZCm)
-                                                : (snapToStep(axisRawDelta, kSnapMoveStepUnits) * kCmPerWorldUnit);
-                    const float snappedUnits = snappedCm / kCmPerWorldUnit;
-                    for (int idx : targets) {
-                        objects_[idx].transform = objects_[idx].anchorTransform;
-                        if (rightAxis_ == proto::RightAxis::X)
-                            objects_[idx].transform.position.x += snappedUnits;
-                        else if (rightAxis_ == proto::RightAxis::Y)
-                            objects_[idx].transform.position.y += snappedUnits;
-                        else if (rightAxis_ == proto::RightAxis::Z)
-                            objects_[idx].transform.position.z += snappedUnits;
+                    if (rightAxis_ == proto::RightAxis::XYZ) {
+                        const float snappedXCm = snapToStep(rawDelta.x * kCmPerWorldUnit, 1.0f);
+                        const float snappedYCm = snapToStep(rawDelta.y * kCmPerWorldUnit, 1.0f);
+                        const float snappedZCm = snapToStep(rawZDeltaCm, 1.0f);
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            objects_[idx].transform.position.x += snappedXCm / kCmPerWorldUnit;
+                            objects_[idx].transform.position.y += snappedYCm / kCmPerWorldUnit;
+                            objects_[idx].transform.position.z += snappedZCm / kCmPerWorldUnit;
+                        }
+                        std::snprintf(badge, sizeof(badge), "MOVE [XYZ-ALL]: (%+.0f, %+.0f, %+.0f) cm",
+                                      snappedXCm, snappedYCm, snappedZCm);
+                    } else {
+                        // X/Y snap to 0.5 world units (5.0 cm); Z snaps to 1.0 cm from apparent palm scale
+                        const float snappedCm = (rightAxis_ == proto::RightAxis::Z)
+                                                    ? snapToStep(rawZDeltaCm, kSnapMoveStepZCm)
+                                                    : (snapToStep(axisRawDelta, kSnapMoveStepUnits) * kCmPerWorldUnit);
+                        const float snappedUnits = snappedCm / kCmPerWorldUnit;
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            if (rightAxis_ == proto::RightAxis::X)
+                                objects_[idx].transform.position.x += snappedUnits;
+                            else if (rightAxis_ == proto::RightAxis::Y)
+                                objects_[idx].transform.position.y += snappedUnits;
+                            else if (rightAxis_ == proto::RightAxis::Z)
+                                objects_[idx].transform.position.z += snappedUnits;
+                        }
+                        std::snprintf(badge, sizeof(badge), "MOVE [%s]: %+.1f cm", axStr, snappedCm);
                     }
-                    std::snprintf(badge, sizeof(badge), "MOVE [%s]: %+.1f cm", axStr, snappedCm);
                     measurementBadge_ = badge;
                     break;
                 }
                 case proto::LeftMode::Resize: {
-                    // Snap scale delta to nearest 0.5 world units (= 5.0 cm)
-                    const float snappedUnits = snapToStep(axisRawDelta, kSnapScaleStepUnits);
-                    const float snappedCm = snappedUnits * kCmPerWorldUnit;
-                    for (int idx : targets) {
-                        objects_[idx].transform = objects_[idx].anchorTransform;
-                        if (rightAxis_ == proto::RightAxis::X) {
-                            objects_[idx].transform.scale.x = std::max(
-                                0.5f, objects_[idx].anchorTransform.scale.x + snappedUnits);
-                        } else if (rightAxis_ == proto::RightAxis::Y) {
-                            objects_[idx].transform.scale.y = std::max(
-                                0.5f, objects_[idx].anchorTransform.scale.y + snappedUnits);
-                        } else if (rightAxis_ == proto::RightAxis::Z) {
-                            objects_[idx].transform.scale.z = std::max(
-                                0.5f, objects_[idx].anchorTransform.scale.z + snappedUnits);
+                    if (rightAxis_ == proto::RightAxis::XYZ) {
+                        const float depthUnits = rawZDeltaCm / kCmPerWorldUnit;
+                        const float uniformDriver =
+                            (std::abs(rawDelta.x) >= std::abs(depthUnits)) ? rawDelta.x : depthUnits;
+                        const float snappedStep = snapToStep(uniformDriver, 0.25f);
+                        const float factor = std::max(0.25f, 1.0f + snappedStep);
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            objects_[idx].transform.scale.x =
+                                std::max(0.25f, objects_[idx].anchorTransform.scale.x * factor);
+                            objects_[idx].transform.scale.y =
+                                std::max(0.25f, objects_[idx].anchorTransform.scale.y * factor);
+                            objects_[idx].transform.scale.z =
+                                std::max(0.25f, objects_[idx].anchorTransform.scale.z * factor);
                         }
+                        std::snprintf(badge, sizeof(badge), "RESIZE [XYZ-ALL]: %.2fx (%+.0f%%)",
+                                      factor, (factor - 1.0f) * 100.0f);
+                    } else {
+                        // Snap scale delta to nearest 0.5 world units (= 5.0 cm)
+                        const float snappedUnits = snapToStep(axisRawDelta, kSnapScaleStepUnits);
+                        const float snappedCm = snappedUnits * kCmPerWorldUnit;
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            if (rightAxis_ == proto::RightAxis::X) {
+                                objects_[idx].transform.scale.x = std::max(
+                                    0.5f, objects_[idx].anchorTransform.scale.x + snappedUnits);
+                            } else if (rightAxis_ == proto::RightAxis::Y) {
+                                objects_[idx].transform.scale.y = std::max(
+                                    0.5f, objects_[idx].anchorTransform.scale.y + snappedUnits);
+                            } else if (rightAxis_ == proto::RightAxis::Z) {
+                                objects_[idx].transform.scale.z = std::max(
+                                    0.5f, objects_[idx].anchorTransform.scale.z + snappedUnits);
+                            }
+                        }
+                        std::snprintf(badge, sizeof(badge), "RESIZE [%s]: %+.1f cm", axStr, snappedCm);
                     }
-                    std::snprintf(badge, sizeof(badge), "RESIZE [%s]: %+.1f cm", axStr, snappedCm);
                     measurementBadge_ = badge;
                     break;
                 }
                 case proto::LeftMode::Rotate: {
-                    // Use intuitive hand axis displacement mapped 1-to-1 to World X / Y / Z
-                    float rotDriver = axisRawDelta;
-                    if (rightAxis_ == proto::RightAxis::X) {
-                        rotDriver = (std::abs(rawDelta.y) > std::abs(rawDelta.x)) ? -rawDelta.y : rawDelta.x;
-                    } else if (rightAxis_ == proto::RightAxis::Y) {
-                        rotDriver = (std::abs(rawDelta.x) > std::abs(rawDelta.y)) ? rawDelta.x : rawDelta.y;
-                    } else if (rightAxis_ == proto::RightAxis::Z) {
-                        rotDriver = (std::abs(rawDelta.x) > std::abs(axisRawDelta)) ? -rawDelta.x : axisRawDelta;
+                    if (rightAxis_ == proto::RightAxis::XYZ) {
+                        const float snappedPitchDeg = snapToStep(-rawDelta.y * 45.0f, kSnapRotateStepDeg);
+                        const float snappedYawDeg   = snapToStep( rawDelta.x * 45.0f, kSnapRotateStepDeg);
+                        const float snappedRollDeg  =
+                            snapToStep((rawZDeltaCm / kCmPerWorldUnit) * 45.0f, kSnapRotateStepDeg);
+                        const Matrix deltaRot = MatrixMultiply(
+                            MatrixMultiply(MatrixRotate({1.0f, 0.0f, 0.0f}, snappedPitchDeg * DEG2RAD),
+                                           MatrixRotate({0.0f, 1.0f, 0.0f}, snappedYawDeg * DEG2RAD)),
+                            MatrixRotate({0.0f, 0.0f, 1.0f}, snappedRollDeg * DEG2RAD));
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            objects_[idx].transform.rotMatrix =
+                                MatrixMultiply(objects_[idx].anchorTransform.rotMatrix, deltaRot);
+                            objects_[idx].transform.rotationDeg.x += snappedPitchDeg;
+                            objects_[idx].transform.rotationDeg.y += snappedYawDeg;
+                            objects_[idx].transform.rotationDeg.z += snappedRollDeg;
+                        }
+                        std::snprintf(badge, sizeof(badge),
+                                      "ROTATE [XYZ-ALL]: (%+.0f, %+.0f, %+.0f) deg",
+                                      snappedPitchDeg, snappedYawDeg, snappedRollDeg);
+                    } else {
+                        // Use intuitive hand axis displacement mapped 1-to-1 to World X / Y / Z
+                        float rotDriver = axisRawDelta;
+                        if (rightAxis_ == proto::RightAxis::X) {
+                            rotDriver = (std::abs(rawDelta.y) > std::abs(rawDelta.x)) ? -rawDelta.y : rawDelta.x;
+                        } else if (rightAxis_ == proto::RightAxis::Y) {
+                            rotDriver = (std::abs(rawDelta.x) > std::abs(rawDelta.y)) ? rawDelta.x : rawDelta.y;
+                        } else if (rightAxis_ == proto::RightAxis::Z) {
+                            rotDriver = (std::abs(rawDelta.x) > std::abs(axisRawDelta)) ? -rawDelta.x : axisRawDelta;
+                        }
+                        const float rawDeg = rotDriver * 45.0f;
+                        const float snappedDeg = snapToStep(rawDeg, kSnapRotateStepDeg);
+                        Vector3 axisVec{1.0f, 0.0f, 0.0f};
+                        if (rightAxis_ == proto::RightAxis::Y) axisVec = {0.0f, 1.0f, 0.0f};
+                        else if (rightAxis_ == proto::RightAxis::Z) axisVec = {0.0f, 0.0f, 1.0f};
+                        const Matrix deltaRot = MatrixRotate(axisVec, snappedDeg * DEG2RAD);
+                        for (int idx : targets) {
+                            objects_[idx].transform = objects_[idx].anchorTransform;
+                            objects_[idx].transform.rotMatrix =
+                                MatrixMultiply(objects_[idx].anchorTransform.rotMatrix, deltaRot);
+                            if (rightAxis_ == proto::RightAxis::X)
+                                objects_[idx].transform.rotationDeg.x += snappedDeg;
+                            else if (rightAxis_ == proto::RightAxis::Y)
+                                objects_[idx].transform.rotationDeg.y += snappedDeg;
+                            else if (rightAxis_ == proto::RightAxis::Z)
+                                objects_[idx].transform.rotationDeg.z += snappedDeg;
+                        }
+                        std::snprintf(badge, sizeof(badge), "ROTATE [%s]: %+.0f deg", axStr, snappedDeg);
                     }
-                    const float rawDeg = rotDriver * 45.0f;
-                    const float snappedDeg = snapToStep(rawDeg, kSnapRotateStepDeg);
-                    Vector3 axisVec{1.0f, 0.0f, 0.0f};
-                    if (rightAxis_ == proto::RightAxis::Y) axisVec = {0.0f, 1.0f, 0.0f};
-                    else if (rightAxis_ == proto::RightAxis::Z) axisVec = {0.0f, 0.0f, 1.0f};
-                    const Matrix deltaRot = MatrixRotate(axisVec, snappedDeg * DEG2RAD);
-                    for (int idx : targets) {
-                        objects_[idx].transform = objects_[idx].anchorTransform;
-                        objects_[idx].transform.rotMatrix =
-                            MatrixMultiply(objects_[idx].anchorTransform.rotMatrix, deltaRot);
-                        if (rightAxis_ == proto::RightAxis::X)
-                            objects_[idx].transform.rotationDeg.x += snappedDeg;
-                        else if (rightAxis_ == proto::RightAxis::Y)
-                            objects_[idx].transform.rotationDeg.y += snappedDeg;
-                        else if (rightAxis_ == proto::RightAxis::Z)
-                            objects_[idx].transform.rotationDeg.z += snappedDeg;
-                    }
-                    std::snprintf(badge, sizeof(badge), "ROTATE [%s]: %+.0f deg", axStr, snappedDeg);
                     measurementBadge_ = badge;
                     break;
                 }
@@ -1278,6 +1337,12 @@ private:
     // Glowing 3-layer 3D guide line directly through the active/hovered object
     // matching the locked right_axis (Red=X, Green=Y, Blue=Z).
     static void drawGlowingAxisGuide(Vector3 center, proto::RightAxis axis, bool activePinch) {
+        if (axis == proto::RightAxis::XYZ) {
+            drawGlowingAxisGuide(center, proto::RightAxis::X, activePinch);
+            drawGlowingAxisGuide(center, proto::RightAxis::Y, activePinch);
+            drawGlowingAxisGuide(center, proto::RightAxis::Z, activePinch);
+            return;
+        }
         Vector3 dir{1.0f, 0.0f, 0.0f};
         Color col{255, 65, 75, 255};  // Red for X
         if (axis == proto::RightAxis::Y) {
@@ -1534,6 +1599,7 @@ private:
                     int activeTip = 8;
                     if (rightAxis_ == proto::RightAxis::Y) activeTip = 12;
                     else if (rightAxis_ == proto::RightAxis::Z) activeTip = 16;
+                    else if (rightAxis_ == proto::RightAxis::XYZ) activeTip = 20;
                     const Color pCol = isPinching_ ? Color{255, 215, 50, 255} : Fade(axisColor(rightAxis_), 0.65f);
                     DrawLineEx(pts[4], pts[activeTip], isPinching_ ? 3.5f : 2.0f, pCol);
                     if (isPinching_) {

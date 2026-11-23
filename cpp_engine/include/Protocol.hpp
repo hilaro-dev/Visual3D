@@ -47,7 +47,8 @@ enum class RightAxis : uint8_t {
     None = 0,
     X = 1,
     Y = 2,
-    Z = 3
+    Z = 3,
+    XYZ = 4
 };
 
 enum class GroupAction : uint8_t {
@@ -147,7 +148,7 @@ inline bool parseTelemetry(const uint8_t* data, size_t size, TelemetryPacket& ou
     if (out.version != kVersion) return false;
     if (!(out.camAspect > 0.2f && out.camAspect < 5.f)) out.camAspect = 4.f / 3.f;
     if (out.left_mode > 7) out.left_mode = 0;
-    if (out.right_axis < 1 || out.right_axis > 3) out.right_axis = 1;
+    if (out.right_axis < 1 || out.right_axis > 4) out.right_axis = 1;
     out.hands[0].contactMask &= 0x07;
     out.hands[1].contactMask &= 0x07;  // Right Hand carries additive R/G/B pinch bitmask in RECOLOR mode
     out.hands[1].reserved &= 0x03;     // Right Hand carries GroupAction (0..3) in GROUP mode

@@ -77,7 +77,7 @@ MODEL_COMPLEXITY: int = 0
 
 MODE_DEBOUNCE_SEC: float = 0.150   # 150ms debounce timer for Left Hand mode switching
 PINCH_ENGAGE_PX: float = 32.0      # Engage Right Thumb+Finger pinch when < 32 px
-PINCH_RELEASE_PX: float = 46.0     # Release Right Thumb+Finger pinch when > 46 px
+PINCH_RELEASE_PX: float = 48.0     # Release Right Thumb+Finger pinch when > 48 px
 RECOLOR_ENGAGE_PX: float = 38.0    # Engage additive RGB channel when < 38 px
 RECOLOR_RELEASE_PX: float = 50.0   # Reset latched RGB channels once all 3 release > 50 px
 SPAWN_ENGAGE_PX: float = 32.0      # Single-shot spawn trigger when < 32 px
@@ -102,8 +102,9 @@ AXIS_NONE = 0
 AXIS_X = 1
 AXIS_Y = 2
 AXIS_Z = 3
-AXIS_NAMES = ["NONE", "X-AXIS", "Y-AXIS", "Z-AXIS"]
-AXIS_FINGER_NAMES = ["None", "Thumb+Index", "Thumb+Middle", "Thumb+Ring"]
+AXIS_XYZ = 4
+AXIS_NAMES = ["NONE", "X-AXIS", "Y-AXIS", "Z-AXIS", "XYZ-ALL"]
+AXIS_FINGER_NAMES = ["None", "Thumb+Index", "Thumb+Middle", "Thumb+Ring", "Thumb+Pinky"]
 
 # Group Mode Right-Hand Actions (matches Protocol.hpp :: GroupAction)
 GROUP_ACTION_SELECT = 0
@@ -421,7 +422,7 @@ class ModeClutchEngine:
             d_rng = dist_px(THUMB_TIP, RING_TIP)
             d_pnk = dist_px(THUMB_TIP, PINKY_TIP)
             f.thumb_tip_dists_px = (d_idx, d_mid, d_rng, d_pnk)
-            f.pinch_px = min(d_idx, d_mid, d_rng)
+            f.pinch_px = min(d_idx, d_mid, d_rng, d_pnk)
             f.pinch_dist = f.pinch_px / max(self.frame_w, 1.0)
         else:
             f.pinch_dist = dist2d(THUMB_TIP, INDEX_TIP)
@@ -486,6 +487,7 @@ class ModeClutchEngine:
                 (AXIS_X, dist_index),
                 (AXIS_Y, dist_middle),
                 (AXIS_Z, dist_ring),
+                (AXIS_XYZ, dist_pinky),
             )
 
             if self.left_mode != MODE_RECOLOR:
@@ -586,7 +588,7 @@ class ModeClutchEngine:
                         right_f.pinch_px = min_dist
                 right_f.group_action = self.group_action
             else:
-                # MOVE / RESIZE / ROTATE / IDLE / DELETE: Single-finger pinch axis & clutch
+                # MOVE / RESIZE / ROTATE / IDLE / DELETE: Single- or 3-axis pinch & clutch
                 closest_axis, min_dist = min(axis_dists, key=lambda item: item[1])
                 if not self.is_pinching:
                     self.right_axis = closest_axis
@@ -598,11 +600,15 @@ class ModeClutchEngine:
                         locked_dist = dist_index
                     elif self.right_axis == AXIS_Y:
                         locked_dist = dist_middle
-                    else:
+                    elif self.right_axis == AXIS_Z:
                         locked_dist = dist_ring
+                    else:
+                        locked_dist = dist_pinky
 
                     if (
-                        closest_axis != self.right_axis
+                        self.right_axis != AXIS_XYZ
+                        and closest_axis != AXIS_XYZ
+                        and closest_axis != self.right_axis
                         and min_dist < self.engage_px
                         and (min_dist + 6.0) < locked_dist
                     ):
@@ -627,8 +633,10 @@ class ModeClutchEngine:
                 active_tip = INDEX_TIP
             elif self.right_axis == AXIS_Y:
                 active_tip = MIDDLE_TIP
-            else:
+            elif self.right_axis == AXIS_Z:
                 active_tip = RING_TIP
+            else:
+                active_tip = PINKY_TIP
             cx_norm = 0.5 * float(right_lm[THUMB_TIP, 0] + right_lm[active_tip, 0])
             cy_norm = 0.5 * float(right_lm[THUMB_TIP, 1] + right_lm[active_tip, 1])
             wx = (cx_norm - 0.5) * 10.0          # [-5.0, +5.0] world units (= +/-50 cm)
