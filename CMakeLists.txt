@@ -72,10 +72,10 @@ add_custom_command(TARGET visual3d_engine POST_BUILD
             "$<TARGET_FILE_DIR:visual3d_engine>/icon.png"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:visual3d_engine>"
-            "$<TARGET_FILE_DIR:visual3d_engine>/3DModeller.exe"
+            "$<TARGET_FILE_DIR:visual3d_engine>/Visual3D.exe"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:visual3d_engine>"
-            "${CMAKE_SOURCE_DIR}/3DModeller.exe"
+            "${CMAKE_SOURCE_DIR}/Visual3D.exe"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:visual3d_engine>"
             "${CMAKE_SOURCE_DIR}/visual3d_engine.exe"

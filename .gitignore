@@ -1,0 +1,22 @@
+# Build & packaging outputs
+build/
+dist/
+*.spec
+*.exe
+*.dll
+*.zip
+Visual3D-v1.0-Windows/
+3DModeller-v1.0-Windows/
+
+# Runtime logs & Python cache
+tracker.log
+tracker_error.log
+__pycache__/
+*.pyc
+
+*.zip
+*.exe
+*.dll
+build/
+dist/
+Visual3D-v1.0-Windows/

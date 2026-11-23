@@ -4,7 +4,7 @@
 // Features:
 //   * Resolves the executable's directory via `GetModuleFileNameA` to locate
 //     `python_tracker\hand_tracker.py` whether launched from the project root
-//     (`3DModeller.exe`) or from `\build\` (`visual3d_engine.exe`).
+//     (`Visual3D.exe`) or from `\build\` (`visual3d_engine.exe`).
 //   * Uses `C:\raylib\emsdk\python\3.13.3_64bit\python.exe` with fallback to
 //     `python.exe` on PATH.
 //   * Spawns silently with `CREATE_NO_WINDOW` (no console popup).
@@ -63,14 +63,22 @@ public:
         stop();
 #if defined(_WIN32)
         const std::string exeDir = executableDirectory();
+        const std::string bundledExe = exeDir + "\\hand_tracker.exe";
         std::string workDir;
-        std::string scriptPath;
-        if (!locateTrackerScript(exeDir, workDir, scriptPath)) {
-            status_ = "TRACKER NOT FOUND";
-            return false;
+        std::string cmd;
+        if (fileExists(bundledExe)) {
+            workDir = exeDir;
+            cmd = "\"" + bundledExe + "\" --port " + std::to_string(udpPort) + " --quiet";
+        } else {
+            std::string scriptPath;
+            if (!locateTrackerScript(exeDir, workDir, scriptPath)) {
+                status_ = "TRACKER NOT FOUND";
+                return false;
+            }
+            const std::string pythonExe = resolvePythonExecutable();
+            cmd = "\"" + pythonExe + "\" \"" + scriptPath + "\" --port " +
+                  std::to_string(udpPort) + " --quiet";
         }
-
-        const std::string pythonExe = resolvePythonExecutable();
 
         // Create a Job Object that automatically terminates the child process tree
         // when the job handle is closed (or when the parent process exits/crashes).
@@ -85,8 +93,6 @@ public:
             }
         }
 
-        std::string cmd = "\"" + pythonExe + "\" \"" + scriptPath + "\" --port " +
-                          std::to_string(udpPort) + " --quiet";
         std::vector<char> cmdBuf(cmd.begin(), cmd.end());
         cmdBuf.push_back('\0');
 

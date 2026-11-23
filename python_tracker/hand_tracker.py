@@ -53,6 +53,13 @@ import urllib.request
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+if getattr(sys, "frozen", False):
+    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "tracker.log")
+    _log_fh = open(_log_path, "w", encoding="utf-8", buffering=1)
+    sys.stdout = _log_fh
+    sys.stderr = _log_fh
+    print(f"[vision] Frozen hand_tracker started | exe={sys.executable}", flush=True)
+
 import numpy as np
 
 try:
@@ -188,16 +195,31 @@ HAND_LANDMARKER_URL = (
 # Camera Initialization (DirectShow on Windows, 640x480)
 # --------------------------------------------------------------------------- #
 def open_camera(index: int, width: int, height: int, fps: int) -> cv2.VideoCapture:
+    cap: Optional[cv2.VideoCapture] = None
+    opened_backend = "default"
     if platform.system() == "Windows":
-        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(index)
+        backends = [
+            ("CAP_DSHOW", getattr(cv2, "CAP_DSHOW", 700)),
+            ("CAP_MSMF", getattr(cv2, "CAP_MSMF", 1400)),
+            ("CAP_ANY", getattr(cv2, "CAP_ANY", 0)),
+        ]
+        for name, api in backends:
+            print(f"[vision] Trying camera {index} with {name}...", flush=True)
+            candidate = cv2.VideoCapture(index, api) if api != 0 else cv2.VideoCapture(index)
+            if candidate.isOpened():
+                cap = candidate
+                opened_backend = name
+                break
+            candidate.release()
     else:
-        cap = cv2.VideoCapture(index)
+        candidate = cv2.VideoCapture(index)
+        if candidate.isOpened():
+            cap = candidate
 
-    if not cap.isOpened():
+    if cap is None or not cap.isOpened():
         raise RuntimeError(f"Unable to open webcam index {index}")
 
+    print(f"[vision] Camera {index} opened via {opened_backend}", flush=True)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cap.set(cv2.CAP_PROP_FPS, fps)
@@ -744,8 +766,22 @@ def send_video_chunks(sock: socket.socket, addr: Tuple[str, int], frame_bgr: np.
             break
 
 
+def _resource_base_dir() -> str:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return str(sys._MEIPASS)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_model_path() -> str:
+    base = _resource_base_dir()
+    for rel in (os.path.join("models", "hand_landmarker.task"), "hand_landmarker.task"):
+        candidate = os.path.join(base, rel)
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(base, "models", "hand_landmarker.task")
+
+
 def parse_args() -> argparse.Namespace:
-    here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description="Visual3D Mode + Clutch Hand Tracker")
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--width", type=int, default=CAPTURE_WIDTH)
@@ -766,7 +802,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--swap-hands", action="store_true")
     ap.add_argument("--debug-view", "--preview", dest="debug_view", action="store_true",
                     default=DEBUG_VIEW)
-    ap.add_argument("--model", default=os.path.join(here, "models", "hand_landmarker.task"))
+    ap.add_argument("--model", default=_default_model_path())
     ap.add_argument("--quiet", action="store_true")
     return ap.parse_args()
 
@@ -927,4 +963,19 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        log_dir = (
+            os.path.dirname(os.path.abspath(sys.executable))
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(os.path.abspath(__file__))
+        )
+        log_path = os.path.join(log_dir, "tracker_error.log")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(traceback.format_exc())
+        except OSError:
+            pass
+        sys.exit(1)

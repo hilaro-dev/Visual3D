@@ -1,3 +1,0 @@
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\visual3d_engine.dir/objects.a
-C:\msys64\ucrt64\bin\ar.exe qc CMakeFiles\visual3d_engine.dir/objects.a @CMakeFiles\visual3d_engine.dir\objects1.rsp
-C:\msys64\ucrt64\bin\g++.exe -mwindows -Wl,--whole-archive CMakeFiles\visual3d_engine.dir/objects.a -Wl,--no-whole-archive -o visual3d_engine.exe -Wl,--out-implib,libvisual3d_engine.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\visual3d_engine.dir\linkLibs.rsp

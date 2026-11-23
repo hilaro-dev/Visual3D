@@ -2281,7 +2281,7 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-    InitWindow(winW, winH, "Visual3D // Raylib Mode + Clutch 3D Studio & AR Modeler");
+    InitWindow(winW, winH, "Visual3D — Spatial Gesture CAD");
     const char* iconPath = FileExists("icon.png") ? "icon.png" : "../icon.png";
     if (FileExists(iconPath)) {
         Image icon = LoadImage(iconPath);

@@ -106,7 +106,7 @@ std::string runWin32SaveDialog(const char* defaultName,
 }
 
 constexpr const char kObjFilter[] = "Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
-constexpr const char kProjFilter[] = "3DModeller Project (*.3dmproj)\0*.3dmproj\0All Files (*.*)\0*.*\0";
+constexpr const char kProjFilter[] = "Visual3D Project (*.3dmproj)\0*.3dmproj\0All Files (*.*)\0*.*\0";
 
 }  // namespace
 
@@ -121,12 +121,12 @@ std::string SaveOBJFileDialog(const char* defaultName, void* ownerHwnd) {
 
 std::string OpenProjectFileDialog(void* ownerHwnd) {
     return runWin32OpenDialog(ownerHwnd, kProjFilter, "3dmproj",
-                              "Open 3DModeller Project (.3dmproj)");
+                              "Open Visual3D Project (.3dmproj)");
 }
 
 std::string SaveProjectFileDialog(const char* defaultName, void* ownerHwnd) {
     return runWin32SaveDialog(defaultName, ownerHwnd, kProjFilter, "3dmproj", ".3dmproj",
-                              "Save 3DModeller Project (.3dmproj)");
+                              "Save Visual3D Project (.3dmproj)");
 }
 
 }  // namespace v3d
